@@ -2,7 +2,7 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
-**PcyearBridge（多源音乐桥）** 是一个多源音乐聚合项目，将飞牛音乐、WebDAV、Subsonic / Navidrome 等多种音源统一接入 [SongLoft](https://github.com/songloft-org/songloft-org) 生态，并提供配套跨平台原生 App，实现「一套音源，随处播放」。
+**PcyearBridge（多源音乐桥）** 是一个多源音乐聚合项目，将飞牛音乐、WebDAV、Subsonic / Navidrome 等多种音源统一接入 [SongLoft](https://github.com/songloft-org/songloft) 生态，并提供配套跨平台原生 App，实现「一套音源，随处播放」。
 
 ## 项目地址
 
