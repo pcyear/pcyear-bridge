@@ -106,6 +106,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
+## 免责声明
+
+1. 本项目仅供个人学习、研究与技术交流使用，请勿用于任何商业或非法用途。
+2. 本项目与飞牛音乐、WebDAV、Subsonic / Navidrome、SongLoft 等第三方服务、平台及其运营方**无任何隶属或关联关系**，相关商标与版权归各自所有者所有。
+3. 使用本项目访问任何音源时，请确保您已获得相应内容的合法授权；因使用本项目产生的版权、合规及其他任何责任均由使用者自行承担。
+4. 本项目按 [Apache-2.0](LICENSE) 协议「现状」提供，作者不对软件可用性、安全性及由此产生的任何直接或间接损失承担责任。
+
 ## 关注我们
 
 微信扫码关注 **「pcyear」** 公众号，获取项目更新通知与技术分享：
