@@ -1,0 +1,21 @@
+{
+  "name": "PcyearBridge",
+  "version": "1.1.98",
+  "description": "多源音乐桥 - 将飞牛音乐 / WebDAV / Subsonic 接入 SongLoft",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "genui": "node scripts/gen-ui.mjs",
+    "build": "node scripts/bump-version.mjs && npm run genui && node scripts/build.mjs",
+    "build:official": "npm run genui && songloft-plugin build",
+    "dev": "npm run genui && songloft-plugin dev",
+    "typecheck": "npm run genui && tsc --noEmit",
+    "publish:beta": "node scripts/publish-beta.mjs",
+    "publish:official": "node scripts/publish-official.mjs"
+  },
+  "devDependencies": {
+    "@songloft/plugin-builder": "2.13.8",
+    "@songloft/plugin-sdk": "2.13.8",
+    "typescript": "5.9.3"
+  }
+}

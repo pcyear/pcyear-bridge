@@ -1,0 +1,10 @@
+include: package:flutter_lints/analysis_options.yaml
+
+linter:
+  rules:
+    # 统一规范，便于多端维护与扩展
+    prefer_const_constructors: true
+    prefer_const_literals_to_create_immutables: true
+    unnecessary_string_interpolations: false
+    avoid_print: true
+    sort_constructors_first: true

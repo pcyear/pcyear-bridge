@@ -1,0 +1,1036 @@
+<!-- 该文件由 scripts/gen-ui.mjs 自动生成，请勿直接编辑。修改 static/css/app.css 或 static/js/app.js 后运行 npm run genui。 -->
+<!-- 该文件由 scripts/gen-ui.mjs 自动生成，请勿直接编辑。修改 static/css/app.css 或 static/js/app.js 后运行 npm run genui。 -->
+<!-- 该文件由 scripts/gen-ui.mjs 自动生成，请勿直接编辑。修改 static/css/app.css 或 static/js/app.js 后运行 npm run genui。 -->
+<!-- 该文件由 scripts/gen-ui.mjs 自动生成，请勿直接编辑。修改 static/css/app.css 或 static/js/app.js 后运行 npm run genui。 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <link rel="icon" href="static/icon.81be6f23.png" type="image/png" />
+    <title>
+      多源音乐桥 · PcyearBridge
+    </title>
+    <style>
+      /* CSS_PLACEHOLDER */
+    
+  </style>
+    <script>(function(n){"use strict";(function(a){var e=window,s=document,c=n,o="".concat(s.location.protocol==="https:"?"https://":"http://","sdk.51.la/js-sdk-pro.min.js"),t=s.createElement("script"),i=s.getElementsByTagName("script")[0];t.type="text/javascript",t.setAttribute("charset","UTF-8"),t.async=!0,t.src=o,t.id="LA_COLLECT",c.d=t;var r=function(){e.LA.ids.push(c)};e.LA?e.LA.ids&&r():(e.LA=n,e.LA.ids=[],r()),i.parentNode.insertBefore(t,i)})()})({id:"3Qke0d64MOEngHDU",ck:"3Qke0d64MOEngHDU"});
+</script>
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar" id="sidebar">
+        <h2 class="src-h2">
+          <span>
+            音源
+          </span>
+          <button class="src-gear" id="subsonicBtn" onclick="openSrcMenu(this)" title="设置" aria-label="设置">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+              <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.61 3.61 0 0 1 8.4 12c0-1.98 1.62-3.6 3.6-3.6s3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+            </svg>
+          </button>
+        </h2>
+        <div class="src-list" id="srcList">
+        </div>
+        <div class="add">
+          <button class="btn primary" style="width:100%" onclick="openAdd()">
+            + 添加音源
+          </button>
+        </div>
+        <div class="backup">
+          <button class="btn sm" onclick="exportConfig()">
+            导出配置
+          </button>
+          <button class="btn sm" onclick="importConfigFile()">
+            导入配置
+          </button>
+          <input type="file" id="cfgFile" accept="application/json,.json" style="display:none" onchange="onCfgFile(event)" />
+        </div>
+      </aside>
+      <div class="sidebar-mask" id="sidebarMask" onclick="closeSidebar()">
+      </div>
+      <section class="main">
+        <div class="toolbar">
+          <button class="menu-btn toolbar-menu" onclick="toggleSidebar()" title="音源">
+            <img class="menu-logo" src="static/icon.81be6f23.png" alt="logo" />
+          </button>
+          <div class="toolbar-scroll">
+            <div class="tabs" id="tabs">
+              <div class="tab active" data-v="tracks" onclick="switchView(songMode)">
+                歌曲
+                <span class="vt-btn" id="viewToggleBtn" onclick="event.stopPropagation();toggleFolderView()" title="列表/文件夹视图切换">
+                  ⇄
+                </span>
+              </div>
+              <div class="tab" data-v="albums" onclick="switchView('albums')">
+                专辑
+              </div>
+              <div class="tab" data-v="artists" onclick="switchView('artists')">
+                艺术家
+              </div>
+              <div class="tab" data-v="playlists" onclick="switchView('playlists')">
+                歌单
+              </div>
+              <div class="tab" data-v="favorites" onclick="switchView('favorites')">
+                收藏
+              </div>
+            </div>
+            <button class="search-btn" id="searchBtn" onclick="toggleSearchBar()" title="搜索" aria-label="搜索">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="7"/>
+                <path d="m21 21-4.3-4.3"/>
+              </svg>
+            </button>
+            <a class="author-link" id="authorLink" href="https://www.035151.xyz/?ref=4" target="_blank">
+              by pcyear ↗
+            </a>
+          </div>
+        </div>
+        <div class="search-bar" id="searchBar">
+          <div class="search">
+            <input id="searchInput" placeholder="搜索歌曲 / 专辑 / 艺术家…" oninput="onSearchInput()" onkeydown="if(event.key==='Enter'||event.keyCode===13)doSearch()" />
+            <button class="btn" onclick="doSearch()">
+              搜索
+            </button>
+            <button class="btn" id="searchBackBtn" onclick="closeSearchBar()">
+              返回
+            </button>
+          </div>
+        </div>
+        <div class="ptr" id="ptr">
+          <span class="ptr-spin">
+          </span>
+          <span class="ptr-txt" id="ptrTxt">
+            释放刷新
+          </span>
+        </div>
+        <div class="top-loading" id="topLoading">
+          <span class="ptr-spin">
+          </span>
+          <span>
+            加载中，请稍后…
+          </span>
+        </div>
+        <div class="list-float" id="listFloat">
+          <div class="lf-box">
+            <button class="lf-top" id="lfTop" onclick="scrollListTop()" title="返回顶部" aria-label="返回顶部">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18 6H6"/>
+                <path d="M12 18V8"/>
+                <path d="m8 12 4-4 4 4"/>
+              </svg>
+            </button>
+            <span class="lf-count" id="lfCount">
+            </span>
+          </div>
+          <div class="lf-box lf-back-box" id="lfBackBox">
+            <button class="lf-back" id="lfBack" onclick="lfBack()" title="返回">
+              返回
+            </button>
+          </div>
+        </div>
+        <div id="folderCrumbs">
+        </div>
+        <div class="content" id="content">
+        </div>
+      </section>
+    </div>
+    <div class="bulk-bar collapsed" id="bulkBar">
+      <span class="info" id="bulkInfo">
+        未选择
+      </span>
+      <div class="sp">
+        <button class="btn sm" id="selectAllBtn" onclick="toggleSelectAll()">
+          <svg class="ico" viewBox="0 0 24 24" style="width:14px;height:14px;flex:none">
+            <path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z" fill="currentColor"/>
+          </svg>
+          全选
+        </button>
+        <button class="btn sm" id="clearSelBtn" style="display:none" onclick="clearSelection()">
+          清空
+        </button>
+        <button class="btn sm" id="playSelBtn" style="display:none" onclick="addSelectedToQueue()">
+          ＋ 加入播放
+        </button>
+        <button class="btn sm danger" id="unfavSelBtn" style="display:none" onclick="unfavoriteSelected()">
+          移出收藏
+        </button>
+        <button class="btn primary sm" id="importSelBtn" onclick="importSelected()">
+          导入到 SongLoft
+        </button>
+        <button class="btn primary sm" id="abPlayCurBtn" style="display:none" onclick="abPlayFromCurrent()">
+          从当前集播放
+        </button>
+        <button class="btn sm" id="abPlayFirstBtn" style="display:none" onclick="abPlayFromFirst()">
+          从第一集播放
+        </button>
+        <button class="btn sm" id="abCancelBtn" style="display:none" onclick="clearSelection()">
+          取消
+        </button>
+      </div>
+    </div>
+    <div class="player" id="playerBar">
+      <div class="progress-bar">
+        <input type="range" id="seek" min="0" max="1000" value="0" oninput="onSeek()" />
+      </div>
+      <div class="player-times">
+        <span class="time" id="cur">
+          0:00
+        </span>
+        <span class="time" id="dur">
+          0:00
+        </span>
+      </div>
+      <div class="player-info">
+        <img class="cov" id="pCov" alt="" onclick="openNowPlaying()" style="cursor:pointer" title="查看播放详情" />
+        <div class="meta">
+          <div class="t" id="pTitle">
+            未在播放
+          </div>
+          <div class="a" id="pArtist">
+            选择一首歌曲开始
+          </div>
+        </div>
+        <button class="mini-btn" onclick="toggleMiniPlayer()" title="折叠为悬浮播放器">
+          <svg class="ico" viewBox="0 0 24 24">
+            <polyline points="6 9 12 15 18 9"/>
+          </svg>
+        </button>
+      </div>
+      <div class="controls">
+        <div class="ctl-row">
+          <button class="pbtn ghost" id="prevBtn" onclick="playPrev()" title="上一首">
+          </button>
+          <button class="pbtn ghost" id="back10Btn" onclick="seek(-10)" title="快退 10 秒">
+          </button>
+          <button class="pbtn" id="playBtn" onclick="togglePlay()" title="播放/暂停">
+          </button>
+          <button class="pbtn ghost" id="fwd10Btn" onclick="seek(10)" title="快进 10 秒">
+          </button>
+          <button class="pbtn ghost" id="nextBtn" onclick="playNext()" title="下一首">
+          </button>
+        </div>
+        <div class="ctl-row">
+          <button class="pbtn ghost mode-btn" onclick="toggleModeMenu(this)" title="播放顺序">
+          </button>
+          <button class="pbtn ghost fav-btn" onclick="toggleFavoriteCurrent()" title="收藏">
+          </button>
+          <button class="pbtn ghost sleep-btn" onclick="openSleepTimer()" title="定时停止">
+            <svg viewBox="0 0 24 24" class="ico" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="9"/>
+              <polyline points="12 7 12 12 15 14"/>
+            </svg>
+          </button>
+          <button class="pbtn ghost txt-btn" id="rateHomeBtn" onclick="toggleRateMenu(this)" title="播放速度">
+            倍
+          </button>
+          <button class="pbtn ghost txt-btn" id="lyricHomeBtn" onclick="toggleScreenLyric()" title="屏幕歌词">
+            词
+          </button>
+          <button class="pbtn ghost vol-btn" onclick="toggleVolPop(this)" title="音量">
+          </button>
+          <button class="pbtn ghost playlist-btn2" id="listBtn2" onclick="openPlaylistDrawer()" title="菜单">
+          </button>
+        </div>
+      </div>
+      <div class="screen-lyric" id="screenLyric" aria-hidden="true">
+        <div class="sl-line" id="slLine">
+        </div>
+      </div>
+    </div>
+    <div class="mini-disc" id="miniDisc" onclick="toggleMiniPlayer()" title="展开播放器">
+      <div class="mini-ring" id="miniRing">
+      </div>
+      <img id="miniDiscImg" alt="" />
+    </div>
+    <div class="mode-menu" id="modeMenu">
+    </div>
+    <div class="mode-menu" id="rateMenu">
+    </div>
+    <div class="vol-pop" id="volPop">
+      <div class="vol-track" id="volTrack">
+        <div class="vol-fill" id="volFill">
+        </div>
+        <div class="vol-thumb" id="volThumb">
+        </div>
+      </div>
+      <span class="vpct" id="volPct">
+        100%
+      </span>
+    </div>
+    <div class="modal-mask" id="typeModal" onclick="if(event.target===this)closeTypeModal()">
+      <div class="modal type-modal">
+        <div class="modal-head">
+          <h3>
+            添加音源
+          </h3>
+          <button class="modal-x" onclick="closeTypeModal()" title="关闭" aria-label="关闭">
+            ×
+          </button>
+        </div>
+        <div class="modal-body">
+          <div id="typeGrid">
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-mask" id="riskModal" onclick="if(event.target===this)closeRiskModal()">
+      <div class="modal risk-modal">
+        <div class="modal-head">
+          <h3>风险提示</h3>
+          <button class="modal-x" onclick="closeRiskModal()" title="关闭" aria-label="关闭">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="risk-text">接入 GEAK 音乐需填写 GEAKOS 账号密码，请充分知悉相关风险后再使用该功能！若不认同风险隐患禁止使用该功能！</p>
+          <label class="risk-check">
+            <input type="checkbox" id="riskAgree" onclick="onRiskAgreeChange(this)" onchange="onRiskAgreeChange(this)">
+            <span>我已阅读并充分知悉上述风险</span>
+          </label>
+        </div>
+        <div class="modal-foot risk-foot">
+          <button class="btn" onclick="closeRiskModal()">取消</button>
+          <button class="btn primary" id="riskAgreeBtn" disabled onclick="agreeRisk()">同意并使用</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-mask" id="modal">
+      <div class="modal">
+        <div class="modal-head">
+          <h3 id="modalTitle">
+            添加音源
+          </h3>
+        </div>
+        <div class="modal-body">
+          <div class="field" id="fTypeField">
+            <label>
+              类型
+            </label>
+            <select id="fType" onchange="onTypeChange()">
+              <option value="fnMusic">
+                飞牛音乐 (fnOS Music)
+              </option>
+              <option value="subsonic">
+                Subsonic / Navidrome / Jellyfin
+              </option>
+              <option value="webdav">
+                WebDAV
+              </option>
+              <option value="geak">
+                GEAK / yomtime NAS
+              </option>
+            </select>
+          </div>
+          <div class="field">
+            <label>
+              名称（展示用）
+            </label>
+            <input id="fName" placeholder="例如：我的飞牛音乐" />
+          </div>
+          <div class="field">
+            <label>
+              服务器地址
+            </label>
+            <div class="addr-row">
+              <input id="fBase" placeholder="飞牛音乐地址，如 http://NAS地址:5666" oninput="fnConnectInvalidate()" />
+            </div>
+          </div>
+          <div class="field" id="fUserField">
+            <label id="fUserLabel">
+              用户名
+            </label>
+            <input id="fUser" placeholder="可选，按服务而定" />
+          </div>
+          <div class="field" id="fPassField">
+            <label id="fPassLabel">
+              密码
+            </label>
+            <input id="fPass" type="password" placeholder="密码将进行加密保存，请放心填写" />
+            <div class="hint saved-hint" id="fPassSavedHint"></div>
+          </div>
+          <div class="field" id="fAccessField">
+            <label>
+              访问码（飞牛 fnOS 开启访问码时填写）
+            </label>
+            <input id="fAccessCode" type="password" placeholder="飞牛系统访问码，开启访问码后必填" />
+            <div class="hint saved-hint" id="fAccessSavedHint"></div>
+          </div>
+          <div class="field" id="fRootField">
+            <label>
+              起始目录（可多选）
+            </label>
+            <div class="dir-picker">
+              <div class="dir-crumbs" id="dirCrumbs">
+              </div>
+              <div class="dir-list" id="dirList">
+              </div>
+              <div class="dir-selected" id="dirSelected">
+              </div>
+              <div class="dir-actions">
+                <button type="button" class="btn sm" onclick="loadDirectories()">
+                  加载目录
+                </button>
+                <button type="button" class="btn sm" onclick="loadPageCounts()">
+                  加载本页数量
+                </button>
+                <span class="dir-summary" id="dirSummary">
+                  未选择
+                </span>
+              </div>
+            </div>
+            <div class="hint">
+              WebDAV：点目录进入子目录，勾选即加入（可多选）；留空=根目录全部。Subsonic：勾选音乐库（可多选）。
+            </div>
+          </div>
+          <div class="test-msg" id="testMsg">
+          </div>
+        </div>
+        <div class="modal-foot">
+          <div class="row">
+            <button class="btn" onclick="testConn()">
+              测试连接
+            </button>
+            <button class="btn" onclick="closeModal()">
+              取消
+            </button>
+            <button class="btn primary" onclick="saveSource()">
+              保存
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-mask" id="importModal">
+      <div class="modal" style="width:520px">
+        <div class="modal-head">
+          <h3 id="importTitle">
+            导入到 SongLoft
+          </h3>
+        </div>
+        <div class="modal-body">
+          <div class="field">
+            <label>
+              目标歌单
+            </label>
+            <select id="importTarget">
+              <option value="">
+                -- 仅加入媒体库，不加入歌单 --
+              </option>
+              <option value="__new__">
+                + 新建歌单
+              </option>
+            </select>
+          </div>
+          <div class="field" id="importNewNameField">
+            <label>
+              新歌单名称
+            </label>
+            <input id="importNewName" placeholder="例如：我的飞牛精选" />
+            <div class="hint">
+              留空则使用目录名/默认名称
+            </div>
+          </div>
+          <div class="test-msg" id="importMsg">
+          </div>
+        </div>
+        <div class="modal-foot">
+          <div class="row">
+            <button class="btn" onclick="closeImportModal()">
+              取消
+            </button>
+            <button class="btn primary" onclick="confirmImport()">
+              确认导入
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-mask" id="subsonicModal">
+      <div class="modal sub-modal">
+        <div class="sub-head">
+          <h3>
+            Subsonic 服务端
+            <span class="sub-tag">
+              对外提供 API
+            </span>
+          </h3>
+          <div class="sub-desc">
+            Symfonium / DSub / Navidrome 等第三方客户端可通过 Subsonic 协议浏览并播放音乐。
+          </div>
+        </div>
+        <div class="sub-body">
+          <div class="sub-group">
+            <div class="sub-group-title">
+              运行选项
+            </div>
+            <div class="sub-row">
+              <div>
+                <div class="sub-label-main">
+                  启用 Subsonic 服务端
+                </div>
+                <div class="sub-label-sub">
+                  关闭时所有第三方客户端连接会被拒绝
+                </div>
+              </div>
+              <input type="checkbox" id="subEnabled" />
+            </div>
+            <div class="sub-row">
+              <div>
+                <div class="sub-label-main">
+                  仅推送 SongLoft 本地库
+                </div>
+                <div class="sub-label-sub">
+                  外部源在第三方客户端播放不可靠，建议开启
+                </div>
+              </div>
+              <input type="checkbox" id="subLocalOnly" checked />
+            </div>
+          </div>
+          <div class="sub-group">
+            <div class="sub-group-title">
+              客户端鉴权
+            </div>
+            <div class="field">
+              <label>
+                用户名
+              </label>
+              <input id="subUser" placeholder="admin" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label>
+                密码
+              </label>
+              <input id="subPass" type="password" placeholder="密码将进行加密保存，请放心填写" autocomplete="new-password" />
+            </div>
+          </div>
+          <div class="sub-group">
+            <div class="sub-group-title">
+              服务器地址
+            </div>
+            <div class="field">
+              <label>
+                对外地址（可选）
+              </label>
+              <input id="subHost" placeholder="留空自动取当前访问地址" autocomplete="off" />
+              <div class="hint">
+                一般
+                <b>
+                  留空即可
+                </b>
+                ，自动取当前访问插件的地址。仅当客户端经
+                <b>
+                  别的地址
+                </b>
+                访问（如公网域名/反向代理）时才需填写，例如局域网填 NAS 内网 IP、外网填域名。
+              </div>
+            </div>
+            <div class="field">
+              <label>
+                填写到第三方客户端
+              </label>
+              <div class="sub-url-bar">
+                <input id="subUrl" readonly />
+                <button class="btn sm" onclick="copySubsonicUrl()">
+                  复制
+                </button>
+              </div>
+              <div class="hint">
+                自动从「对外地址」派生（拼接插件路径
+                <code>
+                  /rest
+                </code>
+                ），无需手动填。
+              </div>
+            </div>
+          </div>
+          <div class="sub-tip">
+            <details>
+              <summary>
+                使用说明 / 故障排查
+              </summary>
+              <div class="row-fix">
+                <b>
+                  连接地址填法（区分客户端）
+                </b>
+                ：
+                <b>
+                  Amcfy Music / Symfonium / DSub 等
+                </b>
+                填
+                <b>
+                  带 /rest
+                </b>
+                的完整地址（
+                <code>
+                  .../multisource-music/rest
+                </code>
+                ）；
+                <b>
+                  Navidrome 等会自动拼 /rest 的客户端
+                </b>
+                填
+                <b>
+                  不带 /rest
+                </b>
+                的根地址（
+                <code>
+                  .../multisource-music
+                </code>
+                ）。本插件两种都兼容（含双 /rest）。
+              </div>
+              <div class="row-fix">
+                <b>
+                  「账号密码错误」≠ 密码错
+                </b>
+                ：若地址不带 /rest 而客户端又不自动拼，请求会打在网关未公开路径上返回 401，客户端显示为账号密码错误——先确认地址带
+                <code>
+                  /rest
+                </code>
+                。
+              </div>
+              <div class="row-fix">
+                <b>
+                  Amcfy 连接要选 Subsonic 协议
+                </b>
+                ：若选成 Navidrome/Jellyfin/Daoliyu 等其他协议，Amcfy 会发非标准登录端点（如
+                <code>
+                  POST /rest/auth/login
+                </code>
+                ），插件不认识就 404。
+              </div>
+              <div class="row-fix">
+                <b>
+                  未设置账号密码
+                </b>
+                ：等同于免鉴权，局域网内任意客户端可直接连接。
+              </div>
+            </details>
+          </div>
+        </div>
+        <div class="sub-foot">
+          <div class="test-msg" id="subMsg">
+          </div>
+          <div class="row">
+            <button class="btn" onclick="closeSubsonicModal()">
+              取消
+            </button>
+            <button class="btn primary" onclick="saveSubsonicConfig()">
+              保存
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="src-menu-mask" id="srcMenuMask" onclick="if(event.target===this) closeSrcMenu()">
+      <div class="src-menu" id="srcMenu">
+        <button class="src-menu-item" onclick="closeSrcMenu(); openSubsonicSettings()">
+          Subsonic 服务端设置
+        </button>
+        <button class="src-menu-item" onclick="closeSrcMenu(); openPluginSettings()">
+          插件设置
+        </button>
+      </div>
+    </div>
+    <div class="modal-mask" id="pluginModal">
+      <div class="modal" style="width:380px">
+        <div class="modal-head">
+          <h3>
+            插件设置
+          </h3>
+        </div>
+        <div class="modal-body">
+          <div class="sub-group">
+            <div class="sub-row">
+              <div>
+                <div class="sub-label-main">
+                  开启调试
+                </div>
+                <div class="sub-label-sub">
+                  调试信息总开关：输出浏览器控制台日志，并在播放详情页上下滑时显示位移 / 速度参考值。关闭时全部静默（错误日志除外）
+                </div>
+              </div>
+              <input type="checkbox" id="plDebug" />
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <div class="row">
+            <button class="btn" onclick="closePluginSettings()">
+              取消
+            </button>
+            <button class="btn primary" onclick="savePluginSettings()">
+              保存
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-mask" <div class="modal-mask" id="audiobookModal">
+      <div class="modal" style="width:420px">
+        <div class="modal-head">
+          <h3>
+            Songloft 有声书设置
+          </h3>
+          <button class="modal-x" onclick="closeAudiobookSettings()">
+            ✕
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="sub-group">
+            <div class="sub-row">
+              <div>
+                <div class="sub-label-main">
+                  仅显示指定文件夹
+                </div>
+                <div class="sub-label-sub">
+                  勾选后只显示这些文件夹下的有声书（不勾 = 全部）
+                </div>
+              </div>
+            </div>
+            <div id="abFolders" class="folder-tree-box">
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <div class="row">
+            <button class="btn" onclick="purgeAudiobookBridge()">
+              清理失效记录
+            </button>
+            <button class="btn" onclick="closeAudiobookSettings()">
+              取消
+            </button>
+            <button class="btn primary" onclick="saveAudiobookSettings()">
+              保存
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-mask" id="localLibModal">
+      <div class="modal" style="width:420px">
+        <div class="modal-head">
+          <h3>
+            本地库设置
+          </h3>
+          <button class="modal-x" onclick="closeLocalLibSettings()">
+            ✕
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="sub-group">
+            <div class="sub-row">
+              <div>
+                <div class="sub-label-main">
+                  本地库聚合音源
+                </div>
+                <div class="sub-label-sub">
+                  勾选要并入本地库浏览的音源（不勾选 = 仅显示本地库）
+                </div>
+              </div>
+            </div>
+            <div id="fuseSources" style="display:flex;flex-wrap:wrap;gap:8px;padding:4px 0">
+            </div>
+          </div>
+          <div class="sub-row">
+            <div>
+              <div class="sub-label-main">
+                排除导入的远程歌曲
+              </div>
+              <div class="sub-label-sub">
+                本地库不显示从音源导入的远程副本
+              </div>
+            </div>
+            <input type="checkbox" id="plExclRemote" />
+          </div>
+          <div class="sub-group">
+            <div class="sub-row">
+              <div>
+                <div class="sub-label-main">
+                  仅显示指定文件夹
+                </div>
+                <div class="sub-label-sub">
+                  勾选后本地库只显示这些文件夹下的本地歌（不勾 = 全部）
+                </div>
+              </div>
+            </div>
+            <div id="localFolders" class="folder-tree-box">
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <div class="row">
+            <button class="btn" onclick="closeLocalLibSettings()">
+              取消
+            </button>
+            <button class="btn primary" onclick="saveLocalLibSettings()">
+              保存
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-mask" id="srcErrModal">
+      <div class="modal" style="width:440px">
+        <div class="modal-head">
+          <h3>
+            ⚠ 音源连接失败
+          </h3>
+          <button class="modal-x" onclick="closeSrcErr()">
+            ✕
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="src-err-name" id="srcErrName">
+          </div>
+          <div class="src-err-msg" id="srcErrMsg">
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn primary" onclick="closeSrcErr()">
+            知道了
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-mask" id="updateModal">
+      <div class="modal" style="width:420px">
+        <div class="modal-head">
+          <h3>
+            发现新版本
+          </h3>
+          <button class="modal-x" onclick="closeUpdateModal()">
+            ✕
+          </button>
+        </div>
+        <div class="modal-body">
+          <div style="font-size:13px;color:var(--text);line-height:1.7">
+            检测到新版本
+            <span id="updVer" style="color:var(--accent);font-weight:600">
+            </span>
+            <div style="color:var(--sub);font-size:12px;margin-top:6px" id="updBetaTip">
+            </div>
+            <div style="color:var(--sub);font-size:12px;margin-top:6px">
+              请到插件管理页手动更新
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <div class="row">
+            <button class="btn" onclick="updSkip()">
+              不再提示
+            </button>
+            <button class="btn primary" onclick="closeUpdateModal()">
+              知道了
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="drawer-mask" id="playlistModal" onclick="if(event.target===this) closePlaylistDrawer()">
+    </div>
+    <div class="drawer pl-drawer" id="playlistDrawer" onclick="event.stopPropagation()">
+      <h3>
+        播放列表
+        <span id="plCount" style="font-size:12px;color:var(--sub);font-weight:normal">
+        </span>
+        <button class="pl-refresh" id="plRefresh" onclick="refreshPlaylist()" title="刷新播放列表">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
+            <path d="M21 3v6h-6"/>
+          </svg>
+        </button>
+      </h3>
+      <div class="pl-list" id="plList">
+      </div>
+      <div class="row">
+        <button class="btn danger" onclick="clearQueue()">
+          清空列表
+        </button>
+        <button class="btn" onclick="closePlaylistDrawer()">
+          关闭
+        </button>
+      </div>
+    </div>
+    <div class="np-mask" id="npMask" onclick="closeNowPlaying()">
+      <div class="np-panel" onclick="event.stopPropagation()" ondblclick="onNpPanelDblclick(event)">
+        <div class="np-header">
+          <button class="btn sm" onclick="closeNowPlaying()">
+            ✕
+          </button>
+          <span>
+            正在播放
+          </span>
+          <button class="np-device-btn" id="npDeviceBtn" onclick="CastManager.togglePop(event)" title="选择播放设备">
+            <span class="np-device-ico">
+              📱
+            </span>
+            <span id="npDeviceName">
+              本机
+            </span>
+          </button>
+        </div>
+        <div class="np-body" id="npBody">
+          <div class="np-left">
+            <div class="np-cover-wrap">
+              <img class="np-cover" id="npCover" alt="" draggable="false" onerror="coverErrFix(this)" />
+            </div>
+            <div class="np-pager" id="npPager">
+              <span class="ndot">
+              </span>
+              <span class="ndot">
+              </span>
+            </div>
+            <div class="np-info" title="双击页面空白处收藏 / 再次双击取消收藏">
+              <div class="np-title-row">
+                <div class="np-title" id="npTitle">
+                </div>
+                <button class="np-refresh-btn" onclick="event.stopPropagation(); refreshNowPlayingInfo()" title="刷新当前单曲信息（封面/标题/歌手/歌词）">
+                  <svg class="ico" viewBox="0 0 24 24">
+                    <polyline points="23 4 23 10 17 10"/>
+                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                  </svg>
+                </button>
+              </div>
+              <div class="np-artist" id="npArtist">
+              </div>
+              <div class="np-album" id="npAlbum">
+              </div>
+            </div>
+            <div class="np-progress">
+              <span class="np-time" id="npCur">
+                0:00
+              </span>
+              <input type="range" id="npSeek" min="0" max="1000" value="0" oninput="onNpSeek()" />
+              <span class="np-time" id="npDur">
+                0:00
+              </span>
+            </div>
+            <div class="np-controls">
+              <div class="np-ctl-row">
+                <button class="pbtn ghost" id="npPrevBtn" onclick="playPrev()" title="上一首">
+                </button>
+                <button class="pbtn ghost" id="npBack10Btn" onclick="seek(-10)" title="快退 10 秒">
+                </button>
+                <button class="pbtn" id="npPlayBtn" onclick="togglePlay()" title="播放/暂停">
+                </button>
+                <button class="pbtn ghost" id="npFwd10Btn" onclick="seek(10)" title="快进 10 秒">
+                </button>
+                <button class="pbtn ghost" id="npNextBtn" onclick="playNext()" title="下一首">
+                </button>
+              </div>
+              <div class="np-ctl-row">
+                <button class="pbtn ghost mode-btn" onclick="toggleModeMenu(this)" title="播放顺序">
+                </button>
+                <button class="pbtn ghost fav-btn" onclick="toggleFavoriteCurrent()" title="收藏">
+                </button>
+                <button class="pbtn ghost sleep-btn" onclick="openSleepTimer()" title="定时停止">
+                  <svg viewBox="0 0 24 24" class="ico" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="9"/>
+                    <polyline points="12 7 12 12 15 14"/>
+                  </svg>
+                </button>
+                <button class="pbtn ghost txt-btn" id="npRateBtn" onclick="toggleRateMenu(this)" title="播放速度">
+                  倍
+                </button>
+                <button class="pbtn ghost vol-btn" id="npVolBtn" onclick="toggleVolPop(this)" title="音量">
+                </button>
+                <button class="pbtn ghost" id="npListBtn" onclick="openPlaylistDrawer()" title="菜单">
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="np-right">
+            <div class="np-lyric-wrap" id="npLyricWrap">
+              <div class="np-lyric" id="npLyric">
+                <div class="empty">
+                  暂无歌词
+                </div>
+              </div>
+              <div class="lrc-offset" id="lrcOffset" role="group" aria-label="歌词提前/延迟">
+                <button class="lrc-off-toggle" id="lrcOffToggle" type="button" title="歌词提前/延迟（点击展开滑块）">&#8645;</button>
+                <div class="lrc-off-panel" id="lrcOffPanel">
+                  <span class="lrc-off-val" id="lrcOffVal">0.0s</span>
+                  <div class="lrc-off-track" id="lrcOffTrack">
+                    <div class="lrc-off-fill" id="lrcOffFill"></div>
+                    <div class="lrc-off-thumb" id="lrcOffThumb"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="np-swipe-debug" id="npSwipeDebug">
+      </div>
+      <div class="np-device-pop" id="npDevicePop">
+      </div>
+    </div>
+    <div class="modal-mask" id="sleepMask" onclick="if(event.target===this)closeSleepModal()">
+      <div class="modal">
+        <div class="modal-head">
+          <h3>
+            定时停止播放
+          </h3>
+          <button class="modal-x" onclick="closeSleepModal()" title="关闭" aria-label="关闭">
+            ✕
+          </button>
+        </div>
+        <div class="modal-body">
+          <label class="sleep-radio" id="sleepRadioTime">
+            <input type="radio" name="sleepMode" id="sleepModeTime" onchange="setSleepMode('time')">
+            时间模式（分钟后停止）
+          </label>
+          <div class="sleep-block" data-mode="time" onclick="setSleepMode('time')">
+            <button class="sleep-step" onclick="sleepStep('time',-1)">
+              -
+            </button>
+            <span class="sleep-val" id="sleepTimeVal">
+              5
+            </span>
+            <button class="sleep-step" onclick="sleepStep('time',1)">
+              +
+            </button>
+            <span class="sleep-unit">
+              分钟
+            </span>
+          </div>
+          <label class="sleep-radio" id="sleepRadioCount">
+            <input type="radio" name="sleepMode" id="sleepModeCount" onchange="setSleepMode('count')">
+            集数模式（集后停止）
+          </label>
+          <div class="sleep-block" data-mode="count" onclick="setSleepMode('count')">
+            <button class="sleep-step" onclick="sleepStep('count',-1)">
+              -
+            </button>
+            <span class="sleep-val" id="sleepCountVal">
+              2
+            </span>
+            <button class="sleep-step" onclick="sleepStep('count',1)">
+              +
+            </button>
+            <span class="sleep-unit">
+              集
+            </span>
+          </div>
+          <div class="sleep-status" id="sleepStatus">
+            未设置
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" id="sleepEnableBtn" onclick="onSleepEnable()">
+            保存定时
+          </button>
+          <button class="btn" id="sleepDisableBtn" onclick="onSleepDisable()">
+            关闭定时
+          </button>
+          <button class="btn" onclick="closeSleepModal()">
+            取消
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="toast" id="toast">
+    </div>
+    <!-- MAIN_JS_PLACEHOLDER -->
+  </body>
+</html>

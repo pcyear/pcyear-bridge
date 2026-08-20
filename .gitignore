@@ -1,0 +1,12 @@
+node_modules/
+dist/
+tmp/
+*.log
+.DS_Store
+diag_*.py
+tmp_*.js
+_t_*.py
+*.bak
+
+# 沙箱内重命名产生的冗余副本（可安全删除）：本仓内误入的 fnmusic-bridge 子目录
+fnmusic-bridge/
