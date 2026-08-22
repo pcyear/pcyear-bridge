@@ -10,7 +10,8 @@ enum SourceType {
   webdav,
   subsonic,
   feiniu,
-  songloft;
+  songloft,
+  daoliyu;
 
   static SourceType fromString(String s) {
     switch (s.toLowerCase()) {
@@ -23,6 +24,9 @@ enum SourceType {
       case 'songloft':
       case 'pcyear-bridge':
         return SourceType.songloft;
+      case 'daoliyu':
+      case '道理鱼':
+        return SourceType.daoliyu;
       default:
         return SourceType.webdav;
     }
@@ -38,6 +42,8 @@ enum SourceType {
         return '飞牛';
       case SourceType.songloft:
         return 'SongLoft';
+      case SourceType.daoliyu:
+        return '道理鱼';
     }
   }
 }

@@ -6,6 +6,7 @@ import 'package:pcyear_bridge/data/songloft/songloft_adapter.dart';
 import 'package:pcyear_bridge/data/sources/feiniu/feiniu_adapter.dart';
 import 'package:pcyear_bridge/data/sources/subsonic/subsonic_adapter.dart';
 import 'package:pcyear_bridge/data/sources/webdav/webdav_adapter.dart';
+import 'package:pcyear_bridge/data/sources/daoliyu/daoliyu_adapter.dart';
 
 const String _kSources = 'fnmusic_sources';
 
@@ -49,7 +50,9 @@ class SourceRepository {
       case SourceType.feiniu:
         return FeiNiuAdapter(cfg);
       case SourceType.songloft:
-        return SongLoftAdapter(cfg);
+        return SongLoftAdapter(cfg, repo: this);
+      case SourceType.daoliyu:
+        return DaoLiyuAdapter(cfg);
     }
   }
 
@@ -77,6 +80,18 @@ class SourceRepository {
   }
 
   Future<void> updateSource(SourceConfig cfg) => addSource(cfg);
+
+  /// 仅持久化配置更新（用于 token 刷新后回写），不 dispose / 重建适配器，
+  /// 避免打断正在进行的请求。调用方已持有该适配器实例。
+  Future<void> persistConfigOnly(SourceConfig cfg) async {
+    final idx = _configs.indexWhere((c) => c.id == cfg.id);
+    if (idx < 0) {
+      _configs.add(cfg);
+    } else {
+      _configs[idx] = cfg;
+    }
+    await _persist();
+  }
 
   /// 跨音源聚合的通用实现：逐音源取一页，单个音源失败不影响其它。
   Future<List<T>> _aggregate<T>(

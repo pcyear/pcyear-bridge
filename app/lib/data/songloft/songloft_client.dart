@@ -73,6 +73,10 @@ class SongLoftClient {
   String? refreshToken;
   int expiresIn;
 
+  /// token 刷新成功后回调（用于上层把新 token 持久化，避免重建/重启复用坏 token）。
+  final void Function(String accessToken, String refreshToken, int expiresIn)?
+      onTokensRefreshed;
+
   final http.Client _client = http.Client();
 
   SongLoftClient({
@@ -80,6 +84,7 @@ class SongLoftClient {
     this.accessToken,
     this.refreshToken,
     this.expiresIn = 0,
+    this.onTokensRefreshed,
   });
 
   String get _base => baseUrl.replaceAll(RegExp(r'/+$'), '');
@@ -117,7 +122,7 @@ class SongLoftClient {
     }
   }
 
-  /// 刷新 token。成功后更新 accessToken。
+  /// 刷新 token。成功后更新 accessToken 并触发持久化回调。
   Future<Result<SongLoftTokens>> refresh() async {
     if (refreshToken == null || refreshToken!.isEmpty) {
       return err('无 refresh_token，无法刷新');
@@ -136,6 +141,7 @@ class SongLoftClient {
         accessToken = t.accessToken;
         refreshToken = t.refreshToken;
         expiresIn = t.expiresIn;
+        onTokensRefreshed?.call(accessToken!, refreshToken!, expiresIn);
         return ok(t);
       }
       return err('刷新失败（HTTP ${resp.statusCode}）');
@@ -144,19 +150,45 @@ class SongLoftClient {
     }
   }
 
+  /// 统一的带鉴权请求：遇 401 自动 refresh 一次后重试，仍失败才返回 401 错误。
+  /// [request] 在每次执行前都已应用最新 accessToken，刷新重试安全。
+  Future<Result<T>> _authRequest<T>(Future<Result<T>> Function() request) async {
+    final first = await request();
+    if (first is Err && _isUnauthorized(first)) {
+      final r = await refresh();
+      if (r is Ok) {
+        final retry = await request();
+        return retry;
+      }
+      return err('登录已过期，请重新连接 SongLoft');
+    }
+    return first;
+  }
+
+  bool _isUnauthorized(Result<dynamic> r) {
+    if (r is! Err) return false;
+    final e = (r as Err).error;
+    return e.contains('401') || e.contains('无效的 token');
+  }
+
   /// 获取单首歌曲详情（含 source_data）。
   Future<Result<Map<String, dynamic>>> fetchSong(dynamic id) async {
-    try {
-      final resp = await _client
-          .get(Uri.parse('$_api/songs/$id'), headers: _headers())
-          .timeout(const Duration(seconds: 10));
-      if (resp.statusCode == 200) {
-        return ok(jsonDecode(resp.body) as Map<String, dynamic>);
+    return _authRequest(() async {
+      try {
+        final resp = await _client
+            .get(Uri.parse('$_api/songs/$id'), headers: _headers())
+            .timeout(const Duration(seconds: 10));
+        if (resp.statusCode == 200) {
+          return ok(jsonDecode(resp.body) as Map<String, dynamic>);
+        }
+        if (resp.statusCode == 401) {
+          return err('获取歌曲详情失败（HTTP 401）');
+        }
+        return err('获取歌曲详情失败（HTTP ${resp.statusCode}）');
+      } catch (e) {
+        return err('获取歌曲详情异常：$e');
       }
-      return err('获取歌曲详情失败（HTTP ${resp.statusCode}）');
-    } catch (e) {
-      return err('获取歌曲详情异常：$e');
-    }
+    });
   }
 
   /// 拉取曲库（官方 /api/v1/songs）。filters 透传关键词 / 分类维度。
@@ -195,20 +227,16 @@ class SongLoftClient {
           return ok(SongLoftSongPage.fromJson(
               jsonDecode(resp.body) as Map<String, dynamic>));
         }
+        if (resp.statusCode == 401) {
+          return err('获取曲库失败（HTTP 401）');
+        }
         return err('获取曲库失败（HTTP ${resp.statusCode}）');
       } catch (e) {
         return err('获取曲库异常：$e');
       }
     }
 
-    final first = await doGet();
-    if (first is Err && (first as Err).error.contains('401')) {
-      // 尝试刷新一次后重试
-      final r = await refresh();
-      if (r is Ok) return doGet();
-      return err('未授权（401），请重新登录');
-    }
-    return first;
+    return _authRequest(doGet);
   }
 
   /// 歌曲分类聚合（album / artist / genre / language / style / year / decade）。
@@ -216,18 +244,23 @@ class SongLoftClient {
   Future<Result<Map<String, dynamic>>> facets(String field,
       {int limit = 50, int offset = 0}) async {
     final qp = {'field': field, 'limit': '$limit', 'offset': '$offset'};
-    try {
-      final resp = await _client
-          .get(Uri.parse('$_api/songs/facets').replace(queryParameters: qp),
-              headers: _headers())
-          .timeout(const Duration(seconds: 15));
-      if (resp.statusCode == 200) {
-        return ok(jsonDecode(resp.body) as Map<String, dynamic>);
+    return _authRequest(() async {
+      try {
+        final resp = await _client
+            .get(Uri.parse('$_api/songs/facets').replace(queryParameters: qp),
+                headers: _headers())
+            .timeout(const Duration(seconds: 15));
+        if (resp.statusCode == 200) {
+          return ok(jsonDecode(resp.body) as Map<String, dynamic>);
+        }
+        if (resp.statusCode == 401) {
+          return err('获取分类失败（HTTP 401）');
+        }
+        return err('获取分类失败（HTTP ${resp.statusCode}）');
+      } catch (e) {
+        return err('获取分类异常：$e');
       }
-      return err('获取分类失败（HTTP ${resp.statusCode}）');
-    } catch (e) {
-      return err('获取分类异常：$e');
-    }
+    });
   }
 
   /// 连接性 + 鉴权探测（公开端点 /health，不耗配额）。
@@ -245,24 +278,27 @@ class SongLoftClient {
 
   /// 歌词文本（GET /api/v1/songs/{id}/lyric，已带 access_token）。
   Future<Result<String?>> fetchLyric(dynamic id) async {
-    try {
-      final resp = await _client
-          .get(Uri.parse(songLyricUrl(id)))
-          .timeout(const Duration(seconds: 10));
-      if (resp.statusCode == 200) {
-        // 歌词端点可能返回纯文本或 JSON，尽量提取文本
-        final body = resp.body;
-        if (body.trim().startsWith('{')) {
-          final j = jsonDecode(body) as Map<String, dynamic>;
-          return ok(j['lyric'] as String? ?? body);
+    return _authRequest(() async {
+      try {
+        final resp = await _client
+            .get(Uri.parse(songLyricUrl(id)))
+            .timeout(const Duration(seconds: 10));
+        if (resp.statusCode == 200) {
+          // 歌词端点可能返回纯文本或 JSON，尽量提取文本
+          final body = resp.body;
+          if (body.trim().startsWith('{')) {
+            final j = jsonDecode(body) as Map<String, dynamic>;
+            return ok(j['lyric'] as String? ?? body);
+          }
+          return ok(body);
         }
-        return ok(body);
+        if (resp.statusCode == 404) return ok(null);
+        if (resp.statusCode == 401) return err('获取歌词失败（HTTP 401）');
+        return err('获取歌词失败（HTTP ${resp.statusCode}）');
+      } catch (e) {
+        return err('获取歌词异常：$e');
       }
-      if (resp.statusCode == 404) return ok(null);
-      return err('获取歌词失败（HTTP ${resp.statusCode}）');
-    } catch (e) {
-      return err('获取歌词异常：$e');
-    }
+    });
   }
 
   /// 播放流地址（native 必须把 access_token 拼到 query，播放器无法自定义 Header）。

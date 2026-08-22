@@ -126,6 +126,11 @@ export async function resolveSongsBatch(
       const cfg = await getConfig(n.sid);
       if (!cfg) throw new Error('未找到音源：' + n.sid);
       let t = n.track;
+      // 关键修复：调用方传入的 track 对象其 id 可能为 null（例如有声书「窗口外」队列项 id 尚未解析时，
+      // 前端把队列项本身作为 track 传入，而该项的 id 字段为 null）。若用 track.id 构建 dedupKey / sourceData，
+      // 会导致所有集 dedupe 到同一个 key（null）而复用同一首歌的 songId —— 表现为「传给宿主相同的 id、有进度无声音」。
+      // 因此这里的 id 一律回退为后端收到的源 trackId（n.trackId，来自前端入参，始终正确）。
+      if (t && t.id == null) t = { ...t, id: n.trackId };
       if (!t || !t.title) {
         const adapter = await getAdapter(n.sid);
         // 未命中缓存且调用方没给曲目信息：按 trackId 分页反查。
@@ -159,7 +164,7 @@ export async function resolveSongsBatch(
         album: t.album,
         duration: t.duration,
         sourceData: JSON.stringify(buildSourceData(cfg, t)),
-        dedupKey: `multisource-music:${n.sid}:${t.id}`,
+        dedupKey: `multisource-music:${n.sid}:${n.trackId}`,
       }];
       if (coverUrl) inputs[0].coverUrl = coverUrl;
       if (lyric) { inputs[0].lyric = lyric; inputs[0].lyricSource = 'embedded'; }

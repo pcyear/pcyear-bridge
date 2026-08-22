@@ -168,13 +168,20 @@ export class AudiobookAdapter implements SourceAdapter {
   /** 递归取目录内全部音频（文件夹播放/加入播放列表用，scanAll 60s 缓存零成本） */
   async browseDeep(dirPath: string): Promise<{ tracks: Track[] }> {
     const rel = String(dirPath || '').replace(/^\/+|\/+$/g, '');
-    const prefix = rel ? 'audiobook/' + rel + '/' : 'audiobook/';
+    // 归一化前缀：scanAll 的 track.path 形如 'audiobook/<书>/xxx.mp3'（带前缀），
+    // 但前端传入的 dirPath 可能来自 folders()（带前缀）或 browse() 的 dir.path（不带前缀），
+    // 两种情况都要归一化为带 'audiobook/' 前缀再拼目录分隔，否则 prefix 匹配不上 → 返回空。
+    const norm = rel.startsWith('audiobook/') ? rel : rel ? 'audiobook/' + rel : 'audiobook';
+    const prefix = norm + '/';
     const all = (await this.scanAll()).filter((t) => this.matchRoots(t.path || '') && (t.path || '').startsWith(prefix));
     return { tracks: this.applyCachedHead(all) };
   }
 
   async browse(dirPath: string, opts?: { limit?: number; offset?: number }): Promise<{ dirs: { path: string; name: string; id?: string }[]; tracks: Track[]; total?: number }> {
-    const rel = String(dirPath || '').replace(/^\/+|\/+$/g, '');
+    // 前端传入的 dirPath 带 "audiobook/" 前缀（来自 folders() 的输出），
+    // 而 AUDIOBOOK_ROOT 已是 /app/audiobook，必须剥掉前缀，否则拼成
+    // /app/audiobook/audiobook/... 双重前缀 → readdir 返回空 → “这个分类下没有歌曲”。
+    const rel = String(dirPath || '').replace(/^\/+|\/+$/g, '').replace(/^audiobook\//, '').replace(/^audiobook$/, '');
     const abs = rel ? AUDIOBOOK_ROOT + '/' + rel : AUDIOBOOK_ROOT;
     let entries: any[] = [];
     try { entries = (await songloft.fs.readdir(abs)) || []; } catch { /* 目录不存在 */ }

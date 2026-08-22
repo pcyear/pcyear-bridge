@@ -2173,6 +2173,51 @@ export function registerSubsonicRoutes(router: ReturnType<typeof createRouter>):
       return jsonResponse({ ok: true });
     } catch (e: any) { return jsonResponse({ ok: false, msg: errMsg(e) }); }
   });
+  // 有声书状态永久存储：把原本散落在前端 localStorage 的全部有声书数据
+  // （abFolderList 整本书单 / abSongMap host sid 映射 / abTitleCache 标题缓存 /
+  //  abLast 最后播放位置 / abProgress 播放进度 / 队列草稿）统一打包存进 mm_ab_store。
+  // 直接读写 sl().storage（与音源列表同机制，插件级永久），不依赖浏览器 localStorage 镜像，
+  // 因此「部署 disable→enable 清浏览器缓存」后仍能从服务端恢复，抽屉懒加载/示波图/进度不丢失。
+  // 前端启动时 GET 一次装满内存，之后只改内存、去抖 POST 落盘，避免每帧请求。
+  router.get('/rest/abStore', async () => {
+    try {
+      const raw = await sl().storage.get('mm_ab_store');
+      return jsonResponse({ ok: true, data: (raw && typeof raw === 'object') ? raw : {} });
+    } catch (e: any) { return jsonResponse({ ok: false, msg: errMsg(e) }); }
+  });
+  router.post('/rest/abStore', async (req) => {
+    try {
+      const body = readBody(req) || {};
+      const obj: Record<string, any> = {};
+      for (const k of Object.keys(body)) {
+        const v = body[k];
+        obj[k] = (v === undefined || v === null) ? null : (typeof v === 'string' ? v : v);
+      }
+      await sl().storage.set('mm_ab_store', obj);
+      return jsonResponse({ ok: true });
+    } catch (e: any) { return jsonResponse({ ok: false, msg: errMsg(e) }); }
+  });
+  // hostSongMap 持久化：host id → 源 trackId/path 映射（示波图定位/切歌跟随的关键）。
+  // 原本走 localStorage + kvMirror 镜像，但部署 disable→enable 清浏览器缓存会丢失。
+  // 改为直连 sl().storage（mm_hostsongmap），与音源列表同机制永久，部署后仍能恢复。
+  router.get('/rest/hostMap', async () => {
+    try {
+      const raw = await sl().storage.get('mm_hostsongmap');
+      return jsonResponse({ ok: true, data: (raw && typeof raw === 'object') ? raw : {} });
+    } catch (e: any) { return jsonResponse({ ok: false, msg: errMsg(e) }); }
+  });
+  router.post('/rest/hostMap', async (req) => {
+    try {
+      const body = readBody(req) || {};
+      const obj: Record<string, any> = {};
+      for (const k of Object.keys(body)) {
+        const v = body[k];
+        obj[k] = (v === undefined || v === null) ? null : (typeof v === 'string' ? v : v);
+      }
+      await sl().storage.set('mm_hostsongmap', obj);
+      return jsonResponse({ ok: true });
+    } catch (e: any) { return jsonResponse({ ok: false, msg: errMsg(e) }); }
+  });
   // Subsonic REST API：一个 :action 兜住所有 .view 动作。
   // 兼容客户端拼 /rest 的层数：标准 1 级（Navidrome/Substreamer 自动拼 /rest），
   // 也有用户手动把 /rest 填进地址导致的双/三级（Navidrome 实测拼出 /rest/rest/ping.view）。

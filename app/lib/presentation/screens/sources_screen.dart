@@ -97,6 +97,8 @@ class SourcesScreen extends StatelessWidget {
         return Icons.cloud;
       case SourceType.songloft:
         return Icons.cloud_done;
+      case SourceType.daoliyu:
+        return Icons.graphic_eq;
     }
   }
 }
@@ -254,7 +256,9 @@ class _SourceEditPageState extends State<SourceEditPage> {
               labelText: '服务器地址',
               hintText: _type == SourceType.subsonic
                   ? 'http://host:4533'
-                  : 'http://host:5005/dav',
+                  : _type == SourceType.daoliyu
+                      ? 'http://host:4000'
+                      : 'http://host:5005/dav',
             ),
             keyboardType: TextInputType.url,
           ),

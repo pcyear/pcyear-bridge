@@ -64,7 +64,7 @@ export interface SearchResults {
   artists: Artist[];
 }
 
-export type SourceType = 'fnMusic' | 'webdav' | 'subsonic' | 'songloft' | 'audiobook' | 'geak';
+export type SourceType = 'fnMusic' | 'webdav' | 'subsonic' | 'songloft' | 'audiobook' | 'geak' | 'daoliyu';
 
 export interface SourceConfig {
   id: string;             // 实例唯一 ID（用户可添加多个同类服务）

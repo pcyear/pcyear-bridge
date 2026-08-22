@@ -8,7 +8,7 @@ import {
 import { hostBase } from '../lib/cover';
 import { AUDIOBOOK_SOURCE_ID } from './audiobook';
 import { parseAudioHeadFromUrl } from '../lib/audio-head';
-import { fetchWithTimeout, toBytes, getHeader, normalizeLrc } from '../lib/common';
+import { fetchWithTimeout, toBytes, getHeader, normalizeLrc, isHostTokenExpired, hostTokenExpiredError } from '../lib/common';
 
 declare const songloft: any;
 
@@ -79,13 +79,24 @@ export class SongloftAdapter implements SourceAdapter {
     this.sourceId = cfg.id;
   }
 
+  // 统一包住宿主 API 调用：识别「宿主 token 过期」并转译为可操作提示，
+  // 避免把底层 "无效的 token" 错误原样甩给前端、让用户误判为插件故障。
+  private async callHost<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (e: any) {
+      if (isHostTokenExpired(e)) throw hostTokenExpiredError();
+      throw e;
+    }
+  }
+
   private async fetchAllSongs(): Promise<Track[]> {
     const all: Track[] = [];
     const excl = await excludeRemoteEnabled();
     const roots = await localRootPaths();
     let offset = 0;
     while (true) {
-      const page: any[] = await songloft.songs.list({ limit: PAGE, offset });
+      const page: any[] = await this.callHost(() => songloft.songs.list({ limit: PAGE, offset }));
       for (const s of page || []) {
         // 「排除远程歌曲」开关：导入进服务端的远程歌曲（type=remote）不计入本地库
         if (excl && s && s.type === 'remote') continue;
@@ -196,9 +207,10 @@ export class SongloftAdapter implements SourceAdapter {
 
   async testConnection(): Promise<{ ok: boolean; message: string }> {
     try {
-      const r = await songloft.songs.list({ limit: 1 });
+      const r = await this.callHost(() => songloft.songs.list({ limit: 1 }));
       return { ok: true, message: `SongLoft 媒体库可用（${(r || []).length ? '已读取' : '空库'}）` };
     } catch (e: any) {
+      if ((e as any).hostTokenExpired) return { ok: false, message: (e && e.message) || 'SongLoft 登录已过期，请重新登录' };
       return { ok: false, message: (e && e.message) || String(e) };
     }
   }
@@ -221,7 +233,7 @@ export class SongloftAdapter implements SourceAdapter {
   }
 
   async listPlaylists(opts: { limit?: number; offset?: number }): Promise<{ list: Playlist[]; total: number }> {
-    const pls: any[] = await songloft.playlists.list();
+    const pls: any[] = await this.callHost(() => songloft.playlists.list());
     const list = await Promise.all((pls || []).map(async (p: any) => {
       const item: Playlist = {
         id: String(p.id), name: p.name || '未命名', description: p.description,
@@ -231,7 +243,7 @@ export class SongloftAdapter implements SourceAdapter {
       // 宿主 /songs/{id}/cover 对无内嵌封面的歌返回 404；旧逻辑只认 cover_url（首曲）会抢到裂图/空候选，
       // 导致歌单封面空白。改为逐首探 host 端点 200+图片类型，挑第一首能出图的（仅探前 12 首，命中即停）。
       try {
-        const raw: any = await songloft.playlists.getSongs(Number(p.id));
+        const raw: any = await this.callHost(() => songloft.playlists.getSongs(Number(p.id)));
         const songs: any[] = Array.isArray(raw) ? raw : (raw && (raw.list || raw.songs || raw.data || [])) || [];
         const cid = await this.pickFirstDrawableCoverSong(songs);
         if (cid) item.coverId = cid;
@@ -344,7 +356,7 @@ export class SongloftAdapter implements SourceAdapter {
   }
 
   async playlistTracks(playlistId: string, opts: { limit?: number; offset?: number }): Promise<{ list: Track[]; total: number }> {
-    const songs: any[] = await songloft.playlists.getSongs(Number(playlistId));
+    const songs: any[] = await this.callHost(() => songloft.playlists.getSongs(Number(playlistId)));
     return this.slice((songs || []).map((s: any) => toTrack(s)), opts);
   }
 
@@ -353,7 +365,7 @@ export class SongloftAdapter implements SourceAdapter {
     const excl = await excludeRemoteEnabled();
     let tracks: Track[] = [];
     try {
-      const hits: any[] = await songloft.songs.search(query);
+      const hits: any[] = await this.callHost(() => songloft.songs.search(query));
       tracks = (hits || []).slice(0, lim)
         .filter((s: any) => !(excl && s && s.type === 'remote'))
         .map((s: any) => toTrack(s));
@@ -366,7 +378,7 @@ export class SongloftAdapter implements SourceAdapter {
   }
 
   async resolveStream(trackId: string): Promise<UpstreamRef> {
-    const song: any = await songloft.songs.getById(Number(trackId));
+    const song: any = await this.callHost(() => songloft.songs.getById(Number(trackId)));
     const url = (song && (song.url || song.source_url)) || '';
     return { url, headers: {} };
   }

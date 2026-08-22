@@ -205,6 +205,26 @@ export function classifyConnError(msg: string): 'ok' | 'auth' | 'network' {
   return 'auth';
 }
 
+/**
+ * 识别「宿主登录态已失效」类错误：宿主 Go 中间件在 access_token 过期/非法时返回
+ * "无效的 token" / "token has expired" / "signature is invalid" / "missing authentication" 等。
+ * 这类错误不是插件故障，而是 SongLoft 宿主会话过期——必须由用户在 SongLoft 中重新登录解决。
+ * 插件侧识别后给出可操作提示，避免把底层错误原样甩给前端、让用户误判为插件崩溃。
+ */
+export function isHostTokenExpired(raw: any): boolean {
+  const msg = errMsg(raw);
+  const s = String(msg || '').toLowerCase();
+  return /无效的 token|token (has )?expired|signature is invalid|missing authentication|未授权|unauthoriz|token 无效|token无效|expired token|invalid token|登录.*过期|会话.*过期|登录已过期/i.test(s);
+}
+
+/** 把宿主 token 过期错误转成可操作的结构化提示（前端据此提示用户重登，而非笼统报错） */
+export function hostTokenExpiredError(): Error {
+  const e = new Error('SongLoft 登录已过期，请在 SongLoft 中退出并重新登录后重试');
+  (e as any).kind = 'auth';
+  (e as any).hostTokenExpired = true;
+  return e;
+}
+
 export async function fetchWithTimeout(url: string, ms: number, headers?: Record<string, string>): Promise<any> {
   // 超时控制：优先用 AbortController + signal（能真正取消底层 fetch，避免泄漏占用单线程调度）。
   // 实测宿主 QuickJS 环境并非总有 AbortController（缺时 new 抛 ReferenceError）——

@@ -4,12 +4,14 @@ import 'package:pcyear_bridge/core/models.dart';
 import 'package:pcyear_bridge/core/result.dart';
 import 'package:pcyear_bridge/data/songloft/songloft_client.dart';
 import 'package:pcyear_bridge/data/sources/source_adapter.dart';
+import 'package:pcyear_bridge/data/sources/source_repository.dart';
 
 /// SongLoft 适配器：用官方 REST API 把 SongLoft 服务器作为一个一等音源接入。
 ///
 /// 与 WebDAV / 飞牛 / Subsonic 适配器同构，统一走 [SourceAdapter] 契约；UI / 播放器
 /// 不感知后端差异。登录态（access/refresh token）来自 [SourceConfig.extra]，由
-/// 「连接到 SongLoft」流程写入；token 过期时本适配器自动 refresh 并重试。
+/// 「连接到 SongLoft」流程写入；token 过期时本适配器自动 refresh 并重试，刷新后
+/// 立即把新 token 写回 [SourceConfig.extra] 并持久化，避免重建/重启复用坏 token。
 class SongLoftAdapter implements SourceAdapter {
   @override
   final SourceType type = SourceType.songloft;
@@ -18,19 +20,37 @@ class SongLoftAdapter implements SourceAdapter {
 
   final String baseUrl;
   final SongLoftClient _client;
+  final SourceRepository? _repo;
+  /// 当前生效的配置（token 刷新后据此 copyWith 写回）。
+  SourceConfig _cfg;
   /// 曲目缓存：resolveStream / resolveCover / lyric 只拿到 trackId，
   /// 需要反查 source_data 时从这里取。
   final Map<String, Track> _trackCache = {};
 
-  SongLoftAdapter(SourceConfig cfg)
-      : sourceId = cfg.id,
+  SongLoftAdapter(SourceConfig cfg, {SourceRepository? repo})
+      : _cfg = cfg,
+        _repo = repo,
+        sourceId = cfg.id,
         baseUrl = cfg.baseUrl.replaceAll(RegExp(r'/+$'), ''),
         _client = SongLoftClient(
           baseUrl: cfg.baseUrl,
           accessToken: cfg.extra['accessToken'] as String?,
           refreshToken: cfg.extra['refreshToken'] as String?,
           expiresIn: (cfg.extra['expiresIn'] as int?) ?? 0,
-        );
+        ) {
+    // 绑定 token 刷新后的持久化回调（写回配置并落盘）。
+    _client.onTokensRefreshed = (accessToken, refreshToken, expiresIn) {
+      _cfg = _cfg.copyWith(
+        extra: {
+          ..._cfg.extra,
+          'accessToken': accessToken,
+          'refreshToken': refreshToken,
+          'expiresIn': expiresIn,
+        },
+      );
+      _repo?.persistConfigOnly(_cfg);
+    };
+  }
 
   Track _toTrack(Map<String, dynamic> m) {
     final id = '${m['id']}';

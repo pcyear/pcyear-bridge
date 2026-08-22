@@ -91,19 +91,43 @@ export async function listEndpoint(
     if (wantRefresh && typeof (adapter as any).forceRefresh === 'function') {
       try { (adapter as any).forceRefresh(); } catch { /* ignore */ }
     }
-    const r = await fn(adapter, sid, intOf(p.limit, 50), intOf(p.offset, 0));
-    // 渐进扫描的音源（WebDAV 大库）在扫完之前返回的是「部分结果」。
-    // 这种结果绝不能写进内存/持久化缓存，否则会被当成完整列表长期命中，用户永远只看到一半。
-    let partial = false;
-    if (progressive) {
-      try {
-        if (typeof (adapter as any).isScanComplete === 'function') partial = !(adapter as any).isScanComplete();
-      } catch { /* 不支持则视为完整 */ }
+    try {
+      const r = await fn(adapter, sid, intOf(p.limit, 50), intOf(p.offset, 0));
+      // 渐进扫描的音源（WebDAV 大库）在扫完之前返回的是「部分结果」。
+      // 这种结果绝不能写进内存/持久化缓存，否则会被当成完整列表长期命中，用户永远只看到一半。
+      let partial = false;
+      if (progressive) {
+        try {
+          if (typeof (adapter as any).isScanComplete === 'function') partial = !(adapter as any).isScanComplete();
+        } catch { /* 不支持则视为完整 */ }
+      }
+      if (!partial) await listCacheSet(cacheKey, r);
+      return jsonResponse({ ok: true, sourceId: sid, ...r, ...(partial ? { partial: true } : {}) });
+    } catch (e: any) {
+      // 宿主 token 过期（仅影响绑宿主登录态的 songloft 源）：**源级降级**，
+      // 返回空列表 + hostTokenExpired 标记，前端提示「请重新登录 SongLoft」，
+      // 但绝不让这个源把整个接口拖成 ok:false（否则整页空白、其他音源也跟着不显示）。
+      // 这正是「别的插件正常、只有本插件的 songloft 本地库报无效 token」的根因：
+      // 本插件独有依赖宿主登录态的内置源，token 过期时若整页报错就会「连所有音乐源都不显示」。
+      if (e && e.hostTokenExpired) {
+        songloft.log.warn(`音源「${sid}」因宿主登录过期降级（不影响其他音源）：${errMsg(e)}`);
+        return jsonResponse({
+          ok: true,
+          sourceId: sid,
+          list: [],
+          total: 0,
+          hostTokenExpired: true,
+          message: 'SongLoft 登录已过期，请刷新页面重新登录后再查看本地库',
+        }, 200);
+      }
+      throw e;
     }
-    if (!partial) await listCacheSet(cacheKey, r);
-    return jsonResponse({ ok: true, sourceId: sid, ...r, ...(partial ? { partial: true } : {}) });
   } catch (e: any) {
-    return jsonResponse({ ok: false, message: errMsg(e) }, 200);
+    // 其它非 token 类错误：透传结构化标记，前端据此提示而非笼统报错。
+    const extra: any = {};
+    if (e && e.kind) extra.kind = e.kind;
+    if (e && e.hostTokenExpired) extra.hostTokenExpired = true;
+    return jsonResponse({ ok: false, message: errMsg(e), ...extra }, 200);
   }
 }
 
@@ -195,7 +219,12 @@ export async function collectionsInfoEndpoint(req: HTTPRequest): Promise<HTTPRes
     }
     return jsonResponse({ ok: true, sourceId: sid, list });
   } catch (e: any) {
-    return jsonResponse({ ok: false, message: errMsg(e) }, 200);
+    // 宿主 token 过期：透传结构化标记，前端据此提示「请重新登录 SongLoft」而非笼统报错，
+    // 且不影响其他正常音源（各源各自 catch 跳过）。
+    const extra: any = {};
+    if (e && e.kind) extra.kind = e.kind;
+    if (e && e.hostTokenExpired) extra.hostTokenExpired = true;
+    return jsonResponse({ ok: false, message: errMsg(e), ...extra }, 200);
   }
 }
 

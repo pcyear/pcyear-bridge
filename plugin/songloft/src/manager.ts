@@ -6,6 +6,7 @@ import { WebDavAdapter } from './adapters/webdav/adapter';
 import { SongloftAdapter } from './sources/songloft';
 import { AudiobookAdapter, AUDIOBOOK_SOURCE_ID, builtinAudiobookConfig } from './sources/audiobook';
 import { GeakAdapter } from './sources/geak';
+import { DaoliyuAdapter } from './sources/daoliyu';
 export { AUDIOBOOK_SOURCE_ID, builtinAudiobookConfig } from './sources/audiobook';
 import { SourceAdapter, SourceConfig, SourceSummary, SourceType, Track } from './types';
 import { ensureEncryptionKey, encryptCredential, decryptCredential, isEncryptedPayload } from './crypto';
@@ -81,6 +82,7 @@ export const SOURCE_TYPE_LABELS: Record<SourceType, string> = {
   songloft: 'SongLoft 本地库',
   audiobook: 'Songloft 有声书',
   geak: 'GEAK NAS',
+  daoliyu: '道理鱼',
 };
 
 export function buildAdapter(cfg: SourceConfig): SourceAdapter {
@@ -91,6 +93,7 @@ export function buildAdapter(cfg: SourceConfig): SourceAdapter {
     case 'songloft': return new SongloftAdapter(cfg);
     case 'audiobook': return new AudiobookAdapter(cfg);
       case 'geak': return new GeakAdapter(cfg);
+      case 'daoliyu': return new DaoliyuAdapter(cfg);
     default: throw new Error('未知音源类型：' + cfg.type);
   }
 }

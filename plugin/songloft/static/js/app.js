@@ -2,7 +2,8 @@ const TYPE_META = {
     fnMusic: { icon: "\u{1F3B5}", color: "#ff7a45", desc: "\u98DE\u725B NAS \u5B98\u65B9\u97F3\u4E50\u670D\u52A1" },
     subsonic: { icon: "\u{1F3A7}", color: "#7c4dff", desc: "Navidrome / Jellyfin / Airsonic" },
     geak: { icon: "\u{1F5A5}", color: "#00bfa5", desc: "GEAK / yomtime NAS" },
-    webdav: { icon: "\u{1F4C1}", color: "#448aff", desc: "WebDAV / \u575A\u679C\u4E91 / NAS" }
+    webdav: { icon: "\u{1F4C1}", color: "#448aff", desc: "WebDAV / \u575A\u679C\u4E91 / NAS" },
+    daoliyu: { icon: "\u{1F41F}", color: "#26a69a", desc: "Daoliyu Music \u4E2A\u4EBA\u97F3\u4E50\u670D\u52A1" }
 };
 const DEBUG_KEY = "mm:debug";
 
@@ -31,7 +32,8 @@ const TYPE_LABELS = {
         subsonic: "Subsonic",
         webdav: "WebDAV",
         songloft: "SongLoft \u672C\u5730\u5E93",
-        geak: "GEAK NAS"
+        geak: "GEAK NAS",
+        daoliyu: "\u9053\u7406\u9C7C"
     },
     SONGLOFT_SOURCE_ID = "src_msm_songloft",
     ICONS = {
@@ -163,7 +165,38 @@ function coverDel(t) {
     coverCache.delete(t), localStore.del("cover:" + t)
 }
 
+// 诊断：列出 localStorage 全部 key 及值前若干字符，用于定位客户端实际注入的 token
+function dumpLocalStorage() {
+    try {
+        const keys = [];
+        for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            let v = "";
+            try { v = (localStorage.getItem(k) || "").slice(0, 24) } catch (e) { v = "<err>" }
+            keys.push(k + "=" + v)
+        }
+        return keys.join("\n")
+    } catch (e) {
+        return "dump err: " + e
+    }
+}
+
 function getAccessToken() {
+    // 优先读取宿主注入的 songloft-auth（与宿主 common.js 保持一致）
+    try {
+        const raw = localStorage.getItem("songloft-auth");
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed.accessToken === "string" && parsed.accessToken) {
+                return parsed.accessToken
+            }
+        }
+    } catch {}
+    // 宿主兜底：客户端注入的 songloft-auth 失效/损坏时，回退用宿主永久有效的 pluginToken
+    try {
+        const pt = localStorage.getItem("songloft-plugin-token");
+        if (pt) return pt
+    } catch {}
     try {
         const t = new URLSearchParams(window.location.search).get("access_token");
         if (t) return t
@@ -177,6 +210,25 @@ function getAccessToken() {
     } catch {}
     try {
         return sessionStorage.getItem("access_token") || sessionStorage.getItem("token") || ""
+    } catch {}
+    // 通用兜底：扫描 localStorage 全部值，自动选用看起来是合法 JWT（eyJ 开头）的 token。
+    // 容忍客户端把有效 token 放在任意 key（songloft-auth 失效/损坏时仍能自愈）。
+    try {
+        for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            let v = localStorage.getItem(k) || "";
+            // 可能是 JSON 包裹：{"accessToken":"eyJ..."} 或 {"token":"eyJ..."}
+            if (v.indexOf("eyJ") >= 0) {
+                try {
+                    const o = JSON.parse(v);
+                    for (const kk of ["accessToken", "token", "access_token", "jwt", "authToken"]) {
+                        if (typeof o[kk] === "string" && o[kk].indexOf("eyJ") === 0) return o[kk]
+                    }
+                } catch (_) {}
+                const m = v.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
+                if (m) return m[0]
+            }
+        }
     } catch {}
     return ""
 }
@@ -596,11 +648,17 @@ function lazyCover(t, e) {
 }
 async function loadSources() {
     let t = null;
+    let authFailed = false;
     for (let _a = 0; _a < 3; _a++) {
         try {
             t = await api(PLUGIN_BASE + "/sources")
         } catch (_e) {
             t = null
+        }
+        if (t && (t.status === 401 || t.status === 403 ||
+            /无效|缺少认证|unauthorized|invalid/i.test(String(t.message || "")))) {
+            authFailed = true;
+            break
         }
         if (t && t.data && t.data.length) break;
         await new Promise(r => setTimeout(r, 400))
@@ -608,6 +666,45 @@ async function loadSources() {
     if (!t || !t.data) t = {
         data: []
     };
+    if (authFailed) {
+        t = null
+    }
+    if (!t || !t.data) {
+        let diag = "";
+        try {
+            diag += "SDK=" + (window.SongloftPlugin ? "yes" : "no")
+        } catch (e) {}
+        let dump = "";
+        try {
+            const lines = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                let v = "";
+                try { v = localStorage.getItem(k) || "" } catch (e) { v = "<err>" }
+                // 标出值里是否含 eyJ 开头的 JWT
+                const hasJwt = /eyJ[A-Za-z0-9_-]{10,}/.test(v) ? " [JWT✓]" : "";
+                lines.push((k + " = " + v.slice(0, 40) + hasJwt))
+            }
+            dump = lines.join("\n")
+        } catch (e) {
+            dump = "dump err: " + e
+        }
+        if (t && t.message) diag += " | msg=" + t.message;
+        const box = document.createElement("div");
+        box.className = "empty";
+        box.style.cssText = "padding:24px;line-height:1.8";
+        const title = document.createElement("div");
+        title.textContent = "认证失败，无法加载音源。请把下面这段发我：";
+        const pre = document.createElement("pre");
+        pre.style.cssText = "white-space:pre-wrap;word-break:break-all;color:#999;font-size:11px;text-align:left;background:#f6f6f6;padding:10px;border-radius:6px;max-height:50vh;overflow:auto;margin-top:8px";
+        pre.textContent = dump;
+        box.appendChild(title);
+        box.appendChild(pre);
+        const c = $("content");
+        if (c) c.innerHTML = "";
+        if (c) c.appendChild(box);
+        return
+    }
     if (sources = (t.data || []).map(e => ({
             ...e,
             type: e.type
@@ -764,14 +861,25 @@ async function loadSourceStatuses() {
         n._status = s, s.ok || e.push(n)
     }), renderSources(), e
 }
-async function resetPlayerForSourceSwitch() {
+async function resetPlayerForSourceSwitch(prevSrc) {
     curTrack = null;
     pendingTarget = null;
     if (!isAudiobook()) {
         abFolderList = [];
         abFolderPath = ""
     }
-    folderPath = ""
+    folderPath = "";
+    // 按音源持久化抽屉队列：离开旧源时落盘，进入新源时清空并导入新源之前落盘的队列。
+    try {
+        queueRestoreGuard = !0;
+        saveSourceQueue(prevSrc, playerState.queue);
+        await swapQueueForSource(currentSourceId, prevSrc, !0);
+        setTimeout(() => {
+            queueRestoreGuard = !1
+        }, 1200)
+    } catch (_) {
+        queueRestoreGuard = !1
+    }
 }
 
 function renderSources() {
@@ -805,7 +913,7 @@ function renderSources() {
                         currentSourceId = n.id;
                         loadFavoriteIds(currentSourceId).catch(() => {});
                         _snapNav(_prevSrc);
-                        await resetPlayerForSourceSwitch();
+                        await resetPlayerForSourceSwitch(_prevSrc);
                         _loadNav(currentSourceId);
                         if (view === "folders") folderPath = viewNav.folders.path;
                         else if (view === "albums" || view === "artists" || view === "playlists") drill = viewNav[view].drill;
@@ -972,7 +1080,21 @@ async function renderFolderView() {
             e.appendChild(tl)
         }
         isDebugOn() && console.log("[folder] fp=", folderPath, "abFolder=", abLast() && abLast().folder), isAudiobook() && folderPath === (abLast() && abLast().folder) && (markFolderPlaying(), updateFolderProgress(), !folderLocated && locateFolderCurrent().then(() => folderLocated = !0));
-        isAudiobook() && (abFolderList = folderTracks.slice(), abFolderPath = folderPath, syncQueueFromHost()), scheduleCardInfo("folder"), highlightPlaying(), updateListCount()
+        isAudiobook() && (function() {
+            // 有声书：abFolderList 必须是「完整书单」(供抽屉懒加载 + 队列重建)。
+            // 不能用分页的 folderTracks(仅第一页) 覆盖——否则重新进入/返回宿主再进时，
+            // 完整书单被截断成 20 条，抽屉懒加载无更多数据（只显示当前曲前后各 10 条）。
+            // 启动(boot)已从宿主恢复完整 abFolderList，此处仅做「无任何书单记录」时的临时占位，
+            // 且【绝不主动落盘 20 条】，避免把宿主里已有的完整书单截断。随后 syncQueueFromHost
+            // 会从 /batch/tracks(browseDeep) 拉到完整列表并统一落盘。
+            // 守卫：若已存在完整书单且路径与当前浏览一致，绝对不覆盖。
+            if (!abFolderList.length && folderTracks.length && !(abFolderList && abFolderList.length)) {
+                abFolderList = folderTracks.slice();
+                abFolderPath = folderPath;
+                // 注意：此处不调用 abFolderListSave()，防止 20 条分页覆盖宿主完整书单。
+            }
+            syncQueueFromHost();
+        })(), scheduleCardInfo("folder"), highlightPlaying(), updateListCount()
     } catch (err) {
         if (tk === viewToken) {
             folderDirs = [], folderTracks = [], folderTotal = 0, e.innerHTML = '<div class="empty">加载失败：' + esc(err && err.message || String(err)) + '</div>', updateListCount()
@@ -2737,6 +2859,52 @@ function songSourceData(t) {
 // 因此这里建立的映射能精确把宿主回显的 current_song（只有 host id、无 source_data）映射回列表项（源 trackId），
 // 不受 applyState 覆盖 currentSong 影响，切歌（上一首/下一首/播放列表点选）后示波器始终精确跟随。
 const hostSongMap = new Map();
+// hostSongMap 持久化：该映射是切歌后示波图精确跟随、重启后定位文件夹的唯一可靠来源
+// （host id → 源 trackId/path）。它是内存 Map，重启即清空，导致「关掉宿主重开播放列表无法定位」。
+// 因此每次写入都同步落盘到 localStorage（去抖），重启后 startup 时回填，使 applyState 首帧即可补回 path。
+const HOSTSONGMAP_KEY = "songloft-hostSongMap";
+let _hsmSaveTimer = null;
+function persistHostSongMap() {
+    try {
+        // 超出上限时裁剪：保留最近写入的（Map 迭代顺序 ≈ 写入顺序）
+        const _MAX = 600;
+        if (hostSongMap.size > _MAX) {
+            const _keep = new Map();
+            const _arr = [...hostSongMap.entries()].slice(-_MAX);
+            for (const [k, v] of _arr) _keep.set(k, v);
+            hostSongMap.clear();
+            for (const [k, v] of _keep) hostSongMap.set(k, v);
+        }
+        const _obj = {};
+        for (const [k, v] of hostSongMap) _obj[k] = v;
+        if (_hsmSaveTimer) clearTimeout(_hsmSaveTimer);
+        _hsmSaveTimer = setTimeout(() => {
+            try {
+                // 直连宿主永久存储（mm_hostsongmap），不写浏览器 localStorage
+                api(PLUGIN_BASE + "/rest/hostMap", "POST", _obj).catch(() => {})
+            } catch (_) {}
+        }, 200)
+    } catch (_) {}
+}
+async function restoreHostSongMap() {
+    try {
+        const r = await api(PLUGIN_BASE + "/rest/hostMap", "GET");
+        const _obj = r && r.ok && r.data ? r.data : null;
+        if (_obj && typeof _obj === "object") {
+            for (const k in _obj) {
+                const v = _obj[k];
+                if (v && (v.trackId != null || v.path != null)) hostSongMap.set(k, v)
+            }
+        }
+    } catch (_) {}
+}
+// 包装 hostSongMap.set，自动触发持久化（不改读取语义）
+const _hsmOrigSet = hostSongMap.set.bind(hostSongMap);
+hostSongMap.set = function (k, v) {
+    _hsmOrigSet(k, v);
+    persistHostSongMap();
+    return hostSongMap
+};
 // 当前播放队列项：以 playerState.queue + currentIndex 为权威来源。
 // 队列项由播放列表构建，同时携带 host id（.id）与源 trackId（.trackId），
 // 可把宿主回显的 current_song 精确映射回列表项（源 trackId），
@@ -2785,8 +2953,13 @@ function curPlayingRef() {
 // 列表项 t 是否为当前播放：id + sourceId 统一比对（任一方缺省则 sourceId 视为匹配）。
 function isCurTrack(t) {
     const ref = curPlayingRef();
-    if (!ref || !t || t.id == null) return !1;
-    if (String(t.id) !== ref.id) return !1;
+    if (!ref || !t) return !1;
+    // 优先用源 trackId 比对（抽屉队列项 id 是 host sid、trackId 是源；文件夹项 id 是源）。
+    // ref.id 始终为源 trackId，故统一以 trackId 为主键；id 仅作兜底。
+    const tTrack = t.trackId != null ? String(t.trackId) : null;
+    const tId = t.id != null ? String(t.id) : null;
+    const match = (tTrack && tTrack === ref.id) || (tId && tId === ref.id);
+    if (!match) return !1;
     const sid = t.sourceId != null ? t.sourceId : currentSourceId;
     return ref.sourceId == null || sid == null || sid === ref.sourceId
 }
@@ -2801,7 +2974,10 @@ function syncCurTrackFromState() {
         // String 比较避免 id 数字/字符串类型不一致导致匹配失败、示波器停在上首。
         const tid = String(e.trackId);
         const hit = currentList.find(n => String(n.id) === tid) || (isAudiobook() ? folderTracks.find(n => String(n.id) === tid) : null);
-        curTrack = hit || { id: e.trackId, sourceId: e.sourceId != null ? e.sourceId : currentSourceId, title: t.title, artist: t.artist, album: t.album };
+        // 重建 curTrack 必须保留 path：否则切歌后 curTrack.path 丢失，highlightPlaying 取不到当前歌曲路径，
+        // 文件夹示波图前缀匹配失败（表现=「底栏歌名对、但文件夹/歌曲示波图不亮」）。
+        const _p = hit && hit.path != null ? hit.path : (hostSongMap.get(tid) && hostSongMap.get(tid).path != null ? hostSongMap.get(tid).path : null);
+        curTrack = hit ? { ...hit } : { id: e.trackId, sourceId: e.sourceId != null ? e.sourceId : currentSourceId, title: t.title, artist: t.artist, album: t.album, path: _p };
         return
     }
     // 非 multisource-music provider（宿主原生音源）退化路径：仅当 curTrack 缺失时按 title 兜底。
@@ -2815,7 +2991,8 @@ function syncCurTrackFromState() {
         if (m) {
             const tid = String(m.trackId);
             const hit = currentList.find(n => String(n.id) === tid) || (isAudiobook() ? folderTracks.find(n => String(n.id) === tid) : null);
-            curTrack = hit || { id: m.trackId, sourceId: m.sourceId != null ? m.sourceId : currentSourceId, title: t.title || (hit && hit.title) || "", artist: t.artist || (hit && hit.artist) || "", album: t.album || (hit && hit.album) || "" };
+            const _p = hit && hit.path != null ? hit.path : (m.path != null ? m.path : null);
+            curTrack = hit ? { ...hit } : { id: m.trackId, sourceId: m.sourceId != null ? m.sourceId : currentSourceId, title: t.title || (hit && hit.title) || "", artist: t.artist || (hit && hit.artist) || "", album: t.album || (hit && hit.album) || "", path: _p };
             return
         }
     }
@@ -2825,7 +3002,8 @@ function syncCurTrackFromState() {
     if (qi && qi.trackId != null) {
         const tid = String(qi.trackId);
         const hit = currentList.find(n => String(n.id) === tid) || (isAudiobook() ? folderTracks.find(n => String(n.id) === tid) : null);
-        curTrack = hit || { id: qi.trackId, sourceId: qi.sourceId != null ? qi.sourceId : currentSourceId, title: t.title || (hit && hit.title) || "", artist: t.artist || (hit && hit.artist) || "", album: t.album || (hit && hit.album) || "" };
+        const _p = hit && hit.path != null ? hit.path : (qi.path != null ? qi.path : null);
+        curTrack = hit ? { ...hit } : { id: qi.trackId, sourceId: qi.sourceId != null ? qi.sourceId : currentSourceId, title: t.title || (hit && hit.title) || "", artist: t.artist || (hit && hit.artist) || "", album: t.album || (hit && hit.album) || "", path: _p };
         return
     }
     // 3) title+artist 兜底：宿主回显既无 source_data、又不在 hostSongMap/队列时，
@@ -3110,14 +3288,23 @@ function playingRowId() {
 function highlightPlaying(locate = !0) {
     if (isAudiobook()) {
         markFolderPlaying();
-        return
+    } else {
+        document.querySelectorAll(".track").forEach(e => {
+            const on = isCurTrack({ id: e.dataset.id, sourceId: e.dataset.sourceId });
+            e.classList.toggle("playing", on);
+            const w = e.querySelector(".cov-wrap");
+            w && w.classList.toggle("playing", on)
+        });
     }
-    document.querySelectorAll(".track").forEach(e => {
-        const on = isCurTrack({ id: e.dataset.id, sourceId: e.dataset.sourceId });
-        e.classList.toggle("playing", on);
-        const w = e.querySelector(".cov-wrap");
-        w && w.classList.toggle("playing", on)
-    });
+    if (isAudiobook()) {
+        // 有声书：当前播放的「那一集」也要用示波图标出（track row 的 .playing 已由 isCurTrack 判定）。
+        document.querySelectorAll(".track").forEach(e => {
+            const on = isCurTrack({ id: e.dataset.id, sourceId: e.dataset.sourceId });
+            e.classList.toggle("playing", on);
+            const w = e.querySelector(".cov-wrap");
+            w && w.classList.toggle("playing", on)
+        });
+    }
     // 抽屉播放列表即队列本身，currentIndex 是权威位置；直接按序号匹配，
     // 绝不依赖易过期的 curTrack / trackId，避免「切了好几首仍停在第一首」。
     const curIdx = playerState.currentIndex;
@@ -3160,6 +3347,10 @@ function highlightPlaying(locate = !0) {
                 if (_hm && _hm.path) _cp = _hm.path
             }
         }
+        // 有声书歌曲 path 带 "audiobook/" 前缀（如 "audiobook/单田芳/第01回.mp3"），
+        // 而文件夹卡片 dataset.path 不带前缀（"单田芳"）。剥离前缀使前缀匹配能直接命中，
+        // 无需依赖 activeFolderId/abLast 兜底。
+        if (_cp && _cp.indexOf("audiobook/") === 0) _cp = _cp.slice("audiobook/".length);
         let _deepest = null,
             _deepestLen = -1;
         for (const c of folderCards) {
@@ -3172,13 +3363,24 @@ function highlightPlaying(locate = !0) {
             }
             if (on && fp.length > _deepestLen) _deepestLen = fp.length, _deepest = c
         }
-        // cp 完全缺失且无任何前缀命中时，若 activeFolderId 精确命中某张卡片，则点亮该张（唯一）
-        if (!_deepest && !_cp && activeFolderId != null) {
-            for (const c of folderCards) {
-                const fp = c.dataset.path || c.dataset.id || "";
-                if (String(activeFolderId) === String(fp)) {
-                    _deepest = c;
-                    break
+        // 前缀匹配未点亮任何卡片时，兜底点亮逻辑（避免「闪一下就熄灭」）：
+        // 1) activeFolderId 精确命中某张卡片 → 点亮（播放某集/切歌时已同步为当前书文件夹）
+        // 2) 有声书再退一步：用 abLast().folder（最后播放的「那本书」路径）兜底，
+        //    覆盖 path 带源前缀不匹配、后端 browseDeep 未重启、activeFolderId 未更新的场景。
+        // 注意：无论 _cp 是否存在都尝试兜底——前缀常因 audiobook/ 等源前缀不一致而失效。
+        if (!_deepest) {
+            const _fids = [];
+            if (activeFolderId != null) _fids.push(String(activeFolderId));
+            if (isAudiobook()) {
+                // 优先用 abPlayFolder（播放时记录的真实书路径，已去前缀），其次 abLast().folder
+                const _alf = abPlayFolder || (abLast() && abLast().folder);
+                if (_alf != null && _alf !== "") _fids.push(String(_alf))
+            }
+            if (_fids.length) {
+                let _bl = -1;
+                for (const c of folderCards) {
+                    const fp = c.dataset.path || c.dataset.id || "";
+                    if (fp && _fids.indexOf(String(fp)) >= 0 && fp.length > _bl) _bl = fp.length, _deepest = c
                 }
             }
         }
@@ -3193,7 +3395,26 @@ function highlightPlaying(locate = !0) {
     eqNeedLocate && ensurePlayingRowVisible();
     feEqDiag({
         where: "highlightPlaying"
-    })
+    });
+    // === 临时诊断浮层（排查文件夹示波图，后续移除）===
+    try {
+        let dbg = document.getElementById("eqDiagBox");
+        if (!dbg) {
+            dbg = document.createElement("div");
+            dbg.id = "eqDiagBox";
+            dbg.style.cssText = "position:fixed;left:6px;bottom:6px;z-index:99999;max-width:46vw;background:rgba(0,0,0,.82);color:#0f0;font:11px/1.4 monospace;padding:6px 8px;border-radius:6px;white-space:pre-wrap;pointer-events:none";
+            document.body.appendChild(dbg)
+        }
+        const fcs = folderCards.map(c => c.dataset.path || c.dataset.id);
+        dbg.textContent = "[EQ诊断] np-playing=" + document.body.classList.contains("np-is-playing") +
+            "\nactiveFolderId=" + activeFolderId +
+            "\nabLast.folder=" + (abLast() && abLast().folder) +
+            "\n_cp=" + ((playerState.currentSong && playerState.currentSong.path) || (curTrack && curTrack.path) || "") +
+            "\nfolderCards(" + fcs.length + ")=" + fcs.slice(0, 6).join(" | ") +
+            "\ndeepest=" + (_deepest && (_deepest.dataset.path || _deepest.dataset.id));
+        // 仅在播放时显示，避免打扰浏览
+        dbg.style.display = document.body.classList.contains("np-is-playing") ? "block" : "none"
+    } catch (e) {}
 }
 
 // 底层兜底：监听任意新插入的 .track / .card，自动按当前播放状态打标记。
@@ -3303,7 +3524,47 @@ function highlightPlaying(locate = !0) {
     "loading" === document.readyState ? document.addEventListener("DOMContentLoaded", start) : start()
 })();
 
+function _diagApply(t) {
+    // 真机埋点：把 applyState 收到的宿主原始回显 + 关键内部状态，回传到宿主 /rest/kv（songloft_eqprobe），
+    // 用于真机实证定位切歌/重启 bug（不依赖浮层、不依赖本地日志）。保留最近 40 条。
+    try {
+        const n = (typeof t === "object" && t) ? t : {};
+        // 精简回显：只保留定位所需字段，避免超大对象
+        const slim = (x) => {
+            if (!x || typeof x !== "object") return x;
+            if (Array.isArray(x)) return x.slice(0, 6).map(slim);
+            const o = {};
+            for (const k of ["id", "song_id", "trackId", "title", "artist", "album", "path", "source_data", "sourceData", "current_song", "current_index", "currentIndex", "queue", "playing", "is_playing", "position", "duration"]) {
+                if (k in x) o[k] = slim(x[k])
+            }
+            return o
+        };
+        const cs = n.currentSong || n.current_song || {};
+        const entry = {
+            ts: Date.now(),
+            raw: slim(n),
+            a: songIdOf(cs) || "",
+            ph: playingHostId != null ? String(playingHostId) : "",
+            pre: preHostId != null ? String(preHostId) : "",
+            pend: pendingTarget ? pendingTarget.songId : "",
+            curTitle: (playerState.currentSong && playerState.currentSong.title) || "",
+            curPath: (playerState.currentSong && playerState.currentSong.path) || ""
+        };
+        let arr = [];
+        try { arr = JSON.parse(localStorage.getItem("songloft-eqdiag") || "[]") } catch {}
+        arr.push(entry);
+        if (arr.length > 40) arr = arr.slice(-40);
+        localStorage.setItem("songloft-eqdiag", JSON.stringify(arr));
+        // 回传服务端（忽略失败，不影响主流程）
+        try {
+            const payload = {};
+            payload["songloft_eqprobe"] = JSON.stringify(arr);
+            api(PLUGIN_BASE + "/rest/kv", "POST", payload).catch(() => {})
+        } catch (_) {}
+    } catch {}
+}
 function applyState(t, e = "event") {
+    _diagApply(t);
     if (!t || typeof t != "object") return;
     const n = parseState(t);
     if (!n) return;
@@ -3341,6 +3602,70 @@ function applyState(t, e = "event") {
         }, playerPosAnchor = null, renderPlayer(), renderPlaylist(), renderExtraControls();
         return
     }
+    // 切换音源导入过程中：暂不接受宿主回弹，避免旧源队列/自动续播覆盖刚导入的新源队列。
+    if (queueRestoreGuard) return;
+    // 有声书：宿主队列以「滑动窗口」维护（abSetHostWindow 仅放 21 首），前端队列必须以完整文件夹为准。
+    // 当宿主在播却前端队列为空（如切换音源被清空后宿主自动续播、或单集播放未写入队列），
+    // 从 abFolderList 重建，避免「抽屉为空却在播」。
+    if (isAudiobook() && n.queue && n.queue.length && (!playerState.queue || !playerState.queue.length)) {
+        (async () => {
+            try {
+                if (!abFolderList.length) {
+                    const _fp = folderPath || (abLast() && abLast().folder) || "";
+                    if (_fp) {
+                        const _re = await api(PLUGIN_BASE + "/batch/tracks", "POST", {
+                            sourceId: currentSourceId,
+                            items: [{
+                                kind: "folder",
+                                id: _fp,
+                                path: _fp
+                            }]
+                        });
+                        if (_re && _re.ok && Array.isArray(_re.list) && _re.list.length) {
+                            abFolderList = sortTracksByName(_re.list);
+                            abFolderPath = _fp;
+                            abFolderListSave()
+                        }
+                    }
+                }
+                if (abFolderList.length) {
+                    const _sm = abSongMap();
+                    let book = abFolderList.map(x => {
+                        const _srcId = String(x.trackId != null ? x.trackId : x.id);
+                        const c = _sm[_srcId];
+                        return c && c.sid ? {
+                            id: Number(c.sid),
+                            trackId: _srcId,
+                            title: x.title,
+                            artist: x.artist,
+                            coverId: x.coverId,
+                            album: x.album
+                        } : null
+                    }).filter(Boolean);
+                    if (!book.length) book = abFolderList.map(x => ({
+                        id: null,
+                        trackId: x.id,
+                        title: x.title,
+                        artist: x.artist,
+                        coverId: x.coverId,
+                        album: x.album
+                    }));
+                    const csid = n.currentSong ? String(songIdOf(n.currentSong)) : null;
+                    let newIdx = 0;
+                    if (csid != null) {
+                        const fi = book.findIndex(x => String(songIdOf(x)) === csid);
+                        if (fi >= 0) newIdx = fi
+                    }
+                    playerState = {
+                        ...playerState,
+                        queue: book.map(msmMergeMeta),
+                        currentIndex: newIdx
+                    };
+                    renderPlaylist()
+                }
+            } catch (_) {}
+        })()
+    }
     if (CastManager.isMiot() && !isAudiobook()) {
         n.queue && n.queue.length && (playerState = {
             ...playerState,
@@ -3364,7 +3689,17 @@ function applyState(t, e = "event") {
                 if (_fi >= 0) playerState.currentIndex = _fi
             }
         }
-        _bi !== playerState.currentIndex && renderPlaylist()
+        if (_bi !== playerState.currentIndex) {
+            const _ci = playerState.currentIndex;
+            // 仅在「自然顺序播下一集」(_bi+1 === _ci，上一首结束自动跳下一首) 时，
+            // 才把前端抽屉列表随播扩展 1 集并同步宿主窗口随播滑动；
+            // 重开/刷新/随机跳转(_ci 为任意值)不扩展，保证抽屉回到默认 20 条懒加载。
+            if (_bi >= 0 && _ci === _bi + 1 && isAudiobook() && _ci >= 10) {
+                if (_ci + 1 > plRendered) plRendered = Math.min((playerState.queue || []).length, _ci + 1);
+                syncHostWindow(_ci)
+            }
+            renderPlaylist()
+        }
     }
     let s = parsePlaying(t, playerState.playing);
     pendingTarget && (s = !0);
@@ -3432,16 +3767,45 @@ function applyState(t, e = "event") {
                 sourceId: it.sourceId != null ? it.sourceId : currentSourceId
             })
         }
-        const _wantId = playingHostId != null ? playingHostId : (n.currentSong ? songIdOf(n.currentSong) : null);
-        const _newIdx = _wantId != null && String(_wantId) !== "" ? (() => {
-            const _fi = _q.findIndex(x => String(songIdOf(x)) === String(_wantId));
-            return _fi >= 0 ? _fi : (n.currentIndex != null ? n.currentIndex : playerState.currentIndex)
-        })() : (n.currentIndex != null ? n.currentIndex : playerState.currentIndex);
-        // 用插件记录的 playingHostId 优先定位队列项（源 toTrack 已带 path）；切歌时 host 回显的 n.currentSong
-        // 常滞后指向旧曲且无 path，故不依赖它，避免底栏回退到上一首 / path 丢失。
-        const _newCs = _q[_newIdx] || n.currentSong;
+        // ⚠️ 根因修复（"声音是新歌、界面回退上一首"第二轮）：
+        // 之前 _wantId 优先用 playingHostId（上一次「插件发起」切歌时记录的 host id）。
+        // 但当切歌由【宿主自发】触发（自动下一首 / 系统通知 / 传输键）时，并没有新的 pendingTarget，
+        // 此时 playingHostId 仍是陈旧的「上一首」id，_fi 在队列里命中上一首 → _newCs 锁死上一首 → 回退。
+        // 正确优先级：
+        //   1) 用户刚点歌（pendingTarget 在窗口期且宿主回显与之一致）→ 强制用源对象 pendingTarget.track（含 path，权威）
+        //   2) 否则 → 用宿主【当帧推送】的 n.currentSong 作为在播歌（这是真实在播的那首，比陈旧的 playingHostId 可靠）
+        //   3) 兜底 → playingHostId（仅当 n.currentSong 缺失时）
+        const _aId = a != null ? String(a) : "";
+        const _ptOk = pendingTarget && Date.now() - pendingTarget.t < 25e2 &&
+            (_aId !== "" && (String(_aId) === String(pendingTarget.songId) || _aId === String(pendingTarget.trackId)));
+        let _newCs;
+        if (_ptOk) {
+            // 用户刚点歌且宿主确认就是这首歌：用源对象（含 path，权威），绝不依赖滞后回显
+            _newCs = pendingTarget.track || n.currentSong
+        } else {
+            // 宿主当帧回显的在播歌，优先用它定位（真实在播的那首，不依赖陈旧的 playingHostId）
+            const _hostId = n.currentSong ? songIdOf(n.currentSong) : null;
+            const _wantId = _hostId != null && String(_hostId) !== "" ? _hostId : (playingHostId != null ? playingHostId : null);
+            // 切歌定位：优先在前端队列里按真实在播的 host id 找（队列项带 path，最理想）。
+            // 关键修复：当在播的歌不在前端队列里时（如通过宿主/传输键切到文件夹·收藏夹·随机续播的歌，
+            // 前端队列是另一批），绝对不能用宿主的 n.currentIndex 去索引前端队列——
+            // 两套队列不对应，会捞到位置错位的旧歌，导致「声音是新歌、界面回退到上一首」。
+            // 此时直接用宿主当前曲 n.currentSong（真实在播的那首，id/标题正确）作为界面 currentSong，
+            // 再靠下方 path 补缺逻辑（curTrack / hostSongMap）填回 path。_newIdx 仅用于队列内定位，找不到置 -1。
+            const _fi = _wantId != null && String(_wantId) !== "" ? _q.findIndex(x => String(songIdOf(x)) === String(_wantId)) : -1;
+            _newCs = _fi >= 0 ? _q[_fi] : (n.currentSong || null)
+        }
+        const _newIdx = (function() {
+            const _id = _newCs ? songIdOf(_newCs) : null;
+            return _id != null && String(_id) !== "" ? _q.findIndex(x => String(songIdOf(x)) === String(_id)) : -1
+        })();
         const _cs = msmMergeMeta(_newCs);
         // 统一 currentSong.id 为正在播的 host id（与 playingHostId 同坐标系），确保后续 songIdOf / 列表高亮 / hostSongMap 一致
+        const _wantId = (function() {
+            if (_ptOk && pendingTarget) return pendingTarget.trackId != null ? String(pendingTarget.trackId) : (pendingTarget.songId != null ? String(pendingTarget.songId) : null);
+            const _id = _newCs ? songIdOf(_newCs) : null;
+            return _id != null && String(_id) !== "" ? String(_id) : (playingHostId != null ? playingHostId : null)
+        })();
         if (_wantId != null && String(_wantId) !== "") { _cs.id = String(_wantId); _cs.song_id = String(_wantId); }
         // 优先补齐当前歌曲路径：队列项 > curTrack > hostSongMap，写回 _cs.path，
         // 使 currentSong.path 恒有值（文件夹示波图跟随 + 自动定位的唯一可靠来源）。
@@ -3476,10 +3840,23 @@ function applyState(t, e = "event") {
         // 切歌（r）时把 activeFolderId 同步成当前播放曲所在文件夹（歌曲路径的父目录），
         // 使文件夹示波图随切歌跟随：旧文件夹卡片的 activeFolderId 兜底不再命中→熄灭，
         // 新文件夹靠 path 前缀匹配（及该兜底）点亮。覆盖「抽屉切歌 / 宿主自动续播」绕过 playDirectory 的路径。
-        if (r && _finalPath != null) {
-            const _np = String(_cs.path);
-            const _sep = _np.lastIndexOf("/") >= 0 ? "/" : (_np.lastIndexOf("\\") >= 0 ? "\\" : "");
-            activeFolderId = _sep ? _np.substring(0, _np.lastIndexOf(_sep)) : _np
+        if (r) {
+            // 有声书：文件夹卡片 dataset.path 无源前缀（如 "单田芳-隋唐演义"），
+            // 而 currentSong.path 常带 "audiobook/" 前缀，直接从其推导父目录会带前缀、与卡片不匹配→示波图灭。
+            // 故有声书一律用 abLast().folder（已去前缀、与卡片同坐标系）同步 activeFolderId，
+            // 它跨切歌、跨重进都稳定存在，文件夹示波图即可随播放跟随而不丢失。
+            let _nf = null;
+            if (isAudiobook()) {
+                // 优先用 abPlayFolder（播放时记录的真实书路径，已去前缀、与卡片同坐标系）；
+                // 其次退化 abLast().folder（持久化的最后那本书）。二者都避免 folderPath/歌曲路径前缀错配。
+                const _alf = abPlayFolder || (abLast() && abLast().folder);
+                if (_alf != null && _alf !== "") _nf = String(_alf)
+            } else if (_finalPath != null) {
+                const _np = String(_cs.path);
+                const _sep = _np.lastIndexOf("/") >= 0 ? "/" : (_np.lastIndexOf("\\") >= 0 ? "\\" : "");
+                _nf = _sep ? _np.substring(0, _np.lastIndexOf(_sep)) : _np
+            }
+            if (_nf != null) activeFolderId = _nf
         }
         playerState = {
             ...playerState,
@@ -3493,7 +3870,7 @@ function applyState(t, e = "event") {
         renderPlayer();
         renderExtraControls();
         return r ? (clearNowPlayingUI(), hydrateNowPlaying(), $("npMask").classList.contains("show") && renderNowPlaying(), maybeRestoreNp()) : !firstApplyDone && playerState.currentSong && (hydrateNowPlaying(), maybeRestoreNp())
-    }()), isAudiobook() && markFolderPlaying(), updateFolderProgress(), !isAudiobook() && highlightPlaying(), firstApplyDone = !0;
+    }()), isAudiobook() && markFolderPlaying(), updateFolderProgress(), highlightPlaying(), firstApplyDone = !0;
     feEqDiag({
         where: "applyState",
         changed: r,
@@ -3776,11 +4153,32 @@ async function loadAndPlay(t) {
         activePlaylistId = drill.id;
         activeFolderId = null
     } else if (view === "folders") {
-        activeFolderId = folderPath;
+        // 点亮「当前播放歌曲所在文件夹」而非浏览位置 folderPath：
+        // 从歌曲真实路径取父目录，避免「播放 A 却点亮当前浏览的 B 文件夹」的示波图错位。
+        if (t && t.path) {
+            const _sep = t.path.lastIndexOf("/") >= 0 ? "/" : (t.path.lastIndexOf("\\") >= 0 ? "\\" : "");
+            activeFolderId = _sep ? t.path.substring(0, t.path.lastIndexOf(_sep)) : t.path
+        } else {
+            activeFolderId = folderPath
+        }
+        // 有声书：从歌曲路径父目录剥离 "audiobook/" 前缀得到真实书路径，记入 abPlayFolder，
+        // 使切歌 applyState / 兜底 highlightPlaying 都能稳定点亮（与卡片同坐标系）。
+        if (isAudiobook() && t && t.path) {
+            let _bp = t.path.replace(/^audiobook\//, "");
+            const _sep = _bp.lastIndexOf("/");
+            abPlayFolder = _sep >= 0 ? _bp.substring(0, _sep) : _bp
+        }
         activePlaylistId = null
     } else {
         if (view !== "playlists") activePlaylistId = null;
-        if (view !== "folders") activeFolderId = null
+        if (view !== "folders") activeFolderId = null;
+        // 有声书：即使在非 folders 视图（如正在播放页/抽屉）点歌，也要记录书路径，
+        // 使切歌 applyState、兜底 highlightPlaying 都能点亮该书卡片。
+        if (isAudiobook() && t && t.path) {
+            let _bp = t.path.replace(/^audiobook\//, "");
+            const _sep = _bp.lastIndexOf("/");
+            abPlayFolder = _sep >= 0 ? _bp.substring(0, _sep) : _bp
+        }
     }
     if (clearNowPlayingUI(), curTrack = t, queueClearGuard = !1, setIcon($("playBtn"), "pause"), setIcon($("npPlayBtn"), "pause"), t && ($("pTitle").textContent = t.title, $("pArtist").textContent = [t.artist, t.album].filter(Boolean).join(" \xB7 "), checkPlayerMarquee(), setCover($("pCov"), t.coverId), playerState.currentSong = {
             title: t.title,
@@ -3800,7 +4198,7 @@ async function loadAndPlay(t) {
     try {
         // 记录切歌前的目标，供 applyState 区分「宿主滞后回显上一首」与「真切到另一首」
         preHostId = playingHostId;
-        pendingTarget = { songId: String(t.id), sourceId: currentSourceId, trackId: t.id, token: e, t: Date.now() };
+        pendingTarget = { songId: String(t.id), sourceId: currentSourceId, trackId: t.id, token: e, t: Date.now(), track: t };
         const n = await ensureSongIds([{
             sourceId: currentSourceId,
             trackId: t.id,
@@ -3817,7 +4215,8 @@ async function loadAndPlay(t) {
                 sourceId: currentSourceId,
                 trackId: t.id,
                 token: e,
-                t: Date.now()
+                t: Date.now(),
+                track: t
             }, currentLyric = null, currentLyricKey = null, lastLyricIndex = -1, renderLyricIfOpen(), CastManager.isMiot()) try {
             const a = playerState.queue || [];
             if (a.some(l => String(songIdOf(l)) === String(s))) {
@@ -4094,13 +4493,14 @@ function msmPluginTrackFor(t) {
             }
     }
     if (tid == null) return null;
-    const tr = (abFolderList && abFolderList.find(x => String(x.id) === String(tid))) || (folderTracks && folderTracks.find(x => String(x.id) === String(tid))) || (currentList && currentList.find(x => String(x.id) === String(tid))) || null;
+    // abFolderList 项可能 id=hostSid, trackId=sourceId；查找时同时匹配两者。
+    const tr = (abFolderList && abFolderList.find(x => String(x.id) === String(tid) || String(x.trackId) === String(tid))) || (folderTracks && folderTracks.find(x => String(x.id) === String(tid) || String(x.trackId) === String(tid))) || (currentList && currentList.find(x => String(x.id) === String(tid) || String(x.trackId) === String(tid))) || null;
     if (tr) return {
         title: tr.title,
         artist: tr.artist,
         coverId: tr.coverId,
         album: tr.album,
-        trackId: tr.id,
+        trackId: tr.trackId != null ? tr.trackId : tr.id,
         path: tr.path
     };
     const _tc = abTitleCache();
@@ -4142,6 +4542,9 @@ function msmMergeMeta(t) {
 }
 async function syncQueueFromHost() {
     try {
+        // 清空队列期间 / 已清空持久标记生效时 / 切换音源导入中，禁止用宿主队列回填（否则会冲掉前端的清空态，导致「清空不了」）。
+        // 这是 openPlaylistDrawer、addTracksToQueue 等多处直接调用本函数、绕过 applyState 清空保护的漏洞点。
+        if (queueClearGuard || queueRestoreGuard || localStorage.getItem("mm:queueCleared") === "1") return;
         const st = await Player.getState();
         if (!st) return;
         let hq = extractQueue(st);
@@ -4192,25 +4595,32 @@ async function syncQueueFromHost() {
             }
             let book = null;
             if (abFolderList.length) {
+                // 注意：reload 插件/清 localStorage 后 abSongMap 可能为空，此时不应丢弃曲子
+                // （否则整本书队列变空、抽屉懒加载无内容可滚）。无 host sid 时仍保留完整曲目，
+                // id 暂留空，由 abNav 滑动窗口懒解析 sid（与 playTracks 窗口外 id 留空的设计一致）。
+                // abFolderList 项来自 _sorted：id=hostSid, trackId=sourceId；abSongMap 键为 sourceId，
+                // 因此必须用 trackId 查映射，不能用 id（hostSid）查，否则重建后全部 id=null。
                 book = abFolderList.map(x => {
-                    const c = _sm[String(x.id)];
-                    return c && c.sid ? {
-                        id: Number(c.sid),
-                        trackId: x.id,
+                    const _srcId = String(x.trackId != null ? x.trackId : x.id);
+                    const c = _sm[_srcId];
+                    return {
+                        id: c && c.sid ? Number(c.sid) : null,
+                        trackId: _srcId,
                         title: x.title,
                         artist: x.artist,
                         coverId: x.coverId,
                         album: x.album
-                    } : null
-                }).filter(Boolean);
+                    }
+                });
             }
             if ((!book || !book.length) && folderTracks.length) {
                 book = folderTracks.map(x => {
-                    const c = _sm[String(x.id)];
+                    const _srcId = String(x.trackId != null ? x.trackId : x.id);
+                    const c = _sm[_srcId];
                     const _s = c && c.sid ? Number(c.sid) : (x.songId != null ? Number(x.songId) : (songIdOf(x) ? Number(songIdOf(x)) : null));
                     return _s ? {
                         id: _s,
-                        trackId: x.id,
+                        trackId: _srcId,
                         title: x.title,
                         artist: x.artist,
                         coverId: x.coverId,
@@ -4288,18 +4698,15 @@ function hideLoading() {
 let _loadingEl = null;
 
 function abTitleCache() {
-    try {
-        return JSON.parse(localStorage.getItem("msm_ab_titles") || "{}") || {}
-    } catch (_) {
-        return {}
-    }
+    return _abStore.titleCache || {}
 }
 
 function abTitleCachePut(t) {
     if (!t || !t.id) return;
     try {
+        if (!_abStore.titleCache) _abStore.titleCache = {};
         const g = k => t[k] || (t.track && t.track[k]);
-        const tc = abTitleCache();
+        const tc = _abStore.titleCache;
         tc[String(t.id)] = {
             title: g("title"),
             artist: g("artist"),
@@ -4312,7 +4719,7 @@ function abTitleCachePut(t) {
             ks.sort((a, b) => (tc[a].t || 0) - (tc[b].t || 0));
             for (let i = 0; i < 1e3; i++) delete tc[ks[i]]
         }
-        localStorage.setItem("msm_ab_titles", JSON.stringify(tc))
+        abStorePersist()
     } catch (_) {}
 }
 async function addHostTracksToQueue(t) {
@@ -4324,6 +4731,9 @@ async function addHostTracksToQueue(t) {
     }
     try {
         const n = playerState.playing;
+        // 用户主动加入队列：解除「已清空队列」持久标记，否则下方 syncQueueFromHost 会被 guard 拦掉、新歌不显示。
+        try { localStorage.removeItem("mm:queueCleared") } catch (_) {}
+        queueClearGuard = !1;
         await Player.addToQueue(e), await syncQueueFromHost(), n ? toast(`\u5DF2\u52A0\u5165\u64AD\u653E\u5217\u8868\uFF08+${e.length} \u9996\uFF09`) : (await Player.play(e[0]).catch(() => {}), startActivePoll())
     } catch (n) {
         toast("\u6DFB\u52A0\u5931\u8D25\uFF1A" + (n && n.message || n))
@@ -4365,7 +4775,29 @@ async function addTracksToQueue(t) {
             })).map(i => i.songId).filter(Boolean);
         if (!s.length) throw new Error("\u672A\u83B7\u53D6\u5230\u6B4C\u66F2 id");
         const o = playerState.playing;
-        if (await Player.addToQueue(s), queueClearGuard = !1, await syncQueueFromHost(), toast(`\u5DF2\u52A0\u5165\u64AD\u653E\u5217\u8868\uFF1A${s.length} \u9996`), clearSelection(), currentSourceId !== SONGLOFT_SOURCE_ID && ensureSongIds(e, {
+        // 用户主动加入队列：解除「已清空队列」持久标记，否则下方 syncQueueFromHost 会被 guard 拦掉、新歌不显示。
+        try { localStorage.removeItem("mm:queueCleared") } catch (_) {}
+        queueClearGuard = !1;
+        // 先乐观地把新歌追加进前端队列并立即渲染，避免依赖宿主 addToQueue 的异步回显（有延迟时新歌不显示）。
+        const _added = t.map((tr, i) => {
+            const _id = Number(s[i]);
+            return _id ? {
+                id: _id,
+                trackId: tr.id,
+                title: tr.title,
+                artist: tr.artist,
+                album: tr.album,
+                coverId: tr.coverId,
+                sourceId: currentSourceId
+            } : null
+        }).filter(Boolean);
+        if (_added.length) {
+            playerState = {
+                ...playerState,
+                queue: (playerState.queue || []).concat(_added)
+            }, renderPlaylist()
+        }
+        if (await Player.addToQueue(s), await syncQueueFromHost(), toast(`\u5DF2\u52A0\u5165\u64AD\u653E\u5217\u8868\uFF1A${s.length} \u9996`), clearSelection(), currentSourceId !== SONGLOFT_SOURCE_ID && ensureSongIds(e, {
                 withCover: !0,
                 withLyric: !0
             }).catch(() => {}), Player.getState().then(i => {
@@ -4393,13 +4825,24 @@ async function addTracksToQueue(t) {
 }
 let activePlaylistId = null,
     activeFolderId = null;
+// 当前正在播放的有声书「那本书」路径（已去 audiobook/ 前缀，与文件夹卡片 dataset.path 同坐标系）。
+// playDirectory 播放整本书、playTrack 播单集时写入；供 saveAbPosition / applyState / highlightPlaying
+// 作为权威信号，不再依赖 folderPath（它反映浏览位置、在根目录播书时为空，会导致示波图丢失）。
+let abPlayFolder = "";
 async function playDirectory(t, e) {
     // 记录当前正在播放的「集合」，供网格/文件夹卡片示波图点亮：
     // - 歌单（含歌单里的文件夹 playlist folder）：activePlaylistId
     // - 文件夹：activeFolderId（用 path 匹配文件夹卡片）
     // 播放专辑/歌手等非歌单、非文件夹内容则清空对应项。
     activePlaylistId = t === "playlist" ? e.id : null;
-    activeFolderId = t === "folder" ? (e.path || e.id) : null;
+    if (t === "folder") {
+        // e.path 即去前缀的书路径（如 "单田芳-隋唐演义"），与卡片同坐标系；e.id 是 ab:dir: 形式不可用。
+        abPlayFolder = e.path || "";
+        activeFolderId = abPlayFolder || null;
+    } else {
+        abPlayFolder = "";
+        activeFolderId = null;
+    }
     await playDirectories([{
         kind: t,
         id: e.id,
@@ -4465,12 +4908,12 @@ async function playTracks(t, startIdx = 0) {
                     playerState = {
                         ...playerState,
                         currentIndex: playerState.queue.indexOf(_hit),
-                        currentSong: {
-                            title: t[startIdx].title,
-                            artist: t[startIdx].artist,
-                            album: t[startIdx].album,
-                            source_data: JSON.stringify(sourceDataFor(t[startIdx]))
-                        },
+            currentSong: {
+                title: t[startIdx].title,
+                artist: t[startIdx].artist,
+                album: t[startIdx].album,
+                source_data: JSON.stringify(sourceDataFor(t[startIdx]))
+            },
                         playing: true,
                         playerPosAnchor: {
                             pos: 0,
@@ -4570,31 +5013,50 @@ async function playTracks(t, startIdx = 0) {
         let _map = abSongMap();
         let _items = [],
             _failed = 0;
+        // 有声书模式下：宿主仅维护 21 首滑动窗口，窗口外的集无需立即解析 host songId。
+        // 只对「当前播放窗口」内的集做 ensureSongIds，其余集延迟到 abNav 滑动窗口时懒解析，
+        // 避免新书几百集一次性解析导致「加载中」过长。
+        const _winLo = isAudiobook() ? Math.max(0, startIdx - 5) : 0;
+        const _winHi = isAudiobook() ? Math.min(N - 1, startIdx + 15) : N - 1;
         for (let b = 0; b < N; b += 20) {
             if (e !== playSeq) {
                 hideLoading();
                 return;
             }
             const _batch = t.slice(b, b + 20);
+            const _batchEnd = Math.min(N, b + 20);
+            // 本 batch 与播放窗口是否有交集
+            const _batchInWin = isAudiobook() && b <= _winHi && _batchEnd > _winLo;
             let _res = [];
-            try {
-                _res = await ensureSongIds(_batch.map(x => ({
-                    sourceId: currentSourceId,
-                    trackId: x.id,
-                    track: x
-                })));
-            } catch (_) {}
-            const _rm = {};
-            for (const r of _res)
-                if (r && r.trackId && r.songId) {
-                    _rm[String(r.trackId)] = r;
+            if (_batchInWin) {
+                const _need = _batch.map((x, i) => {
+                    const _idx = b + i;
+                    if (_idx < _winLo || _idx > _winHi) return null;
+                    return {
+                        sourceId: currentSourceId,
+                        trackId: x.id,
+                        track: x
+                    }
+                }).filter(Boolean);
+                if (_need.length) {
+                    try {
+                        _res = await ensureSongIds(_need);
+                    } catch (_) {}
+                }
+            }
+            // 按下标对应（_res 与 _need 同序，_need 为 batch 中窗口内项的子集），
+            // 窗口内项按顺序从 _res 取回，避免重复 trackId 反查命中同一 songId。
+            let _ri = 0;
+            for (let _bi = 0; _bi < _batch.length; _bi++) {
+                const o = _batch[_bi];
+                const _idx = b + _bi;
+                const _inside = _idx >= _winLo && _idx <= _winHi;
+                const r = _inside ? _res[_ri++] : null;
+                if (_inside && r && r.trackId != null && r.songId != null) {
                     _map[String(r.trackId)] = {
                         sid: String(r.songId),
                         t: Date.now()
                     };
-                } for (const o of _batch) {
-                const r = _rm[String(o.id)];
-                if (r) {
                     _items.push({
                         ...(o.track || o),
                         trackId: r.trackId,
@@ -4602,11 +5064,18 @@ async function playTracks(t, startIdx = 0) {
                     });
                     abTitleCachePut(o);
                 } else {
-                    _failed++;
+                    const _cached = _map[String(o.id)] && _map[String(o.id)].sid;
+                    _items.push({
+                        ...(o.track || o),
+                        trackId: o.id,
+                        id: _cached ? Number(_cached) : null
+                    });
+                    if (_inside) _failed++
                 }
             }
             await new Promise(r => setTimeout(r, 40));
-            showLoading("加载中 " + Math.min(100, Math.round((b + _batch.length) / N * 100)) + "%");
+            const _done = b + _batch.length;
+            showLoading("加载中 " + Math.min(100, Math.round(_done / N * 100)) + "%");
         }
         abSongMapSave(_map);
         if (!_items.length) {
@@ -4645,6 +5114,13 @@ async function playTracks(t, startIdx = 0) {
         if (e !== playSeq) {
             hideLoading();
             return;
+        }
+        if (isAudiobook()) {
+            // 把整本书（完整队列）同步进 abFolderList，保证持久化与 syncQueueFromHost 重建
+            // 用的是「整本书」而非浏览时的局部列表；否则退出重进后抽屉只剩窗口内集数。
+            abFolderList = _sorted;
+            abFolderPath = abPlayFolder || folderPath || "";
+            abFolderListSave()
         }
         if (isAudiobook()) saveAbPosition();
         highlightPlaying();
@@ -6329,12 +6805,14 @@ function closePlaylistDrawer() {
     $("playlistModal").classList.remove("show"), $("playlistDrawer").classList.remove("show")
 }
 let queueClearGuard = !1,
-    plRendered = 0,
+    queueRestoreGuard = !1,
+    plRendered = 0, // 前端已渲染的条数（懒加载控制）
     folderSourceId = null,
-    queueSourceId = null;
-const PL_PAGE = 50,
+    queueSourceId = null,
+    plPlayCheckSeq = 0;
+const PL_PAGE = 10, // 用户手动滚动懒加载时每次追加的条数
+    PL_DEFAULT = 20, // 抽屉默认显示的条数（总数仍显示全部）
     deadPlIdx = new Set;
-let plPlayCheckSeq = 0;
 
 function markPlDead(t) {
     t < 0 || deadPlIdx.has(t) || (deadPlIdx.add(t), renderPlaylist(), toast("\u8BE5\u6B4C\u66F2\u65E0\u6CD5\u64AD\u653E\uFF0C\u5DF2\u6807\u6CE8\u5931\u6548"))
@@ -6356,14 +6834,23 @@ function plItemHtml(t, e) {
 function renderPlaylist(t) {
     const e = playerState.queue || [],
         n = $("plList");
+    // 总数始终显示全部（总数 = 队列实际长度，与前端懒加载渲染多少条无关）
     $("plCount").textContent = e.length ? "(" + e.length + ")" : "";
     if (!e.length) {
         plRendered = 0;
         n.innerHTML = '<div class="empty">\u64AD\u653E\u5217\u8868\u4E3A\u7A7A</div>';
         return
     }
-    plRendered = e.length;
-    n.innerHTML = e.map(plItemHtml).join("")
+    // 懒加载：plRendered 控制前端实际渲染条数（默认 20，滚动/播放推进时扩展）。
+    // 仅在「未初始化」时设默认 20；若已懒加载但队列变短则裁剪到实际长度（而非降回 20），
+    // 避免队列窗口较小时把已懒加载的条数强制清零，导致「抽屉只显示 20 条、懒加载失效」。
+    // 刷新按钮（refreshPlaylist）会显式 plRendered = 0 归零回到默认 20。
+    if (!plRendered) plRendered = Math.min(e.length, PL_DEFAULT);
+    else if (plRendered > e.length) plRendered = e.length;
+    const _shown = e.slice(0, plRendered);
+    n.innerHTML = _shown.map(plItemHtml).join("");
+    // 渲染后若未填满容器，自动续渲（兜底懒加载，覆盖 scroll 不触发场景）。
+    _plFillMore()
 }
 
 function refreshPlaylist() {
@@ -6372,8 +6859,10 @@ function refreshPlaylist() {
     const done = () => {
         b && b.classList.remove("spin")
     };
+    // 回到默认懒加载条数（20），然后从宿主重新拉取当前队列，避免用前端旧缓存。
+    plRendered = 0;
     if (Player.available()) {
-        Player.getState().then(t => applyState(t, "manual")).catch(() => {}).finally(() => {
+        syncQueueFromHost().catch(() => {}).finally(() => {
             renderPlaylist();
             done()
         })
@@ -6421,11 +6910,7 @@ function isAudiobook() {
 }
 
 function abLast() {
-    try {
-        return JSON.parse(localStorage.getItem("msm_ab_last") || "null")
-    } catch (e) {
-        return null
-    }
+    return _abStore.last || null
 }
 
 function saveAbPosition() {
@@ -6433,20 +6918,20 @@ function saveAbPosition() {
     const c = curTrack && curTrack.id;
     if (!c) return;
     try {
-        const o = abLast() || {};
+        const o = _abStore.last || {};
         o.track = c;
-        o.folder || (o.folder = folderPath);
-        isDebugOn() && console.log("[ab] save track=", c, "folder=", folderPath);
-        localStorage.setItem("msm_ab_last", JSON.stringify(o))
+        // 优先用 abPlayFolder（播放时记录的真实书路径，已去前缀），它不依赖浏览位置 folderPath。
+        // folderPath 在「从根目录播书」时为空，若只用它会导致 abLast.folder 存空串、切歌/重进后示波图丢失。
+        const _folder = abPlayFolder || folderPath;
+        if (_folder) o.folder = _folder;
+        isDebugOn() && console.log("[ab] save track=", c, "folder=", _folder, "abPlayFolder=", abPlayFolder);
+        _abStore.last = o;
+        abStorePersist()
     } catch (e) {}
 }
 
 function abProgMap() {
-    try {
-        return JSON.parse(localStorage.getItem("msm_ab_progress") || "{}") || {}
-    } catch (e) {
-        return {}
-    }
+    return _abStore.progress || {}
 }
 
 function abProgressGet(id) {
@@ -6458,51 +6943,112 @@ function abProgressGet(id) {
 function abProgressSet(id, pos, dur) {
     if (!id) return;
     try {
-        const m = abProgMap();
+        if (!_abStore.progress) _abStore.progress = {};
+        const m = _abStore.progress;
         m[String(id)] = {
             pos: Math.max(0, Math.round(pos || 0)),
             dur: Math.round(dur || 0),
             t: Date.now()
         };
-        localStorage.setItem("msm_ab_progress", JSON.stringify(m))
+        abStorePersist()
     } catch (e) {}
 }
 
 function abProgressClear(id) {
     if (!id) return;
     try {
-        const m = abProgMap();
+        if (!_abStore.progress) return;
+        const m = _abStore.progress;
         delete m[String(id)];
-        localStorage.setItem("msm_ab_progress", JSON.stringify(m))
+        abStorePersist()
     } catch (e) {}
 }
 
-function abSongMap() {
+// ===== 有声书状态统一永久存储（宿主 mm_ab_store，不依赖浏览器 localStorage）=====
+// 全部有声书数据（abFolderList / abSongMap / abTitleCache / abLast / abProgress / 队列草稿）
+// 改为直连宿主 sl().storage（与音源列表同机制，插件级永久）。部署 disable→enable 清浏览器缓存后
+// 仍能从服务端恢复，抽屉懒加载/示波图/进度不再因 localStorage 清空而丢失。
+// 内存 _abStore 为权威缓存：启动时 GET 一次装满；写操作只改内存并去抖 POST 落盘，绝不每帧请求。
+let _abStore = {
+    folderList: null, // {path, list}
+    songMap: {},
+    titleCache: {},
+    last: null, // {track, folder}
+    progress: {},
+    queue: {} // msm_queue_<sourceId> 草稿
+};
+let _abStoreReady = !1,
+    _abStoreTimer = null;
+async function abStoreLoad() {
+    if (_abStoreReady) return _abStore;
     try {
-        return JSON.parse(localStorage.getItem("msm_ab_songmap") || "{}") || {}
-    } catch (e) {
-        return {}
-    }
+        const r = await api(PLUGIN_BASE + "/rest/abStore", "GET");
+        if (r && r.ok && r.data && typeof r.data === "object") {
+            const d = r.data;
+            if (d.folderList && typeof d.folderList === "object") _abStore.folderList = d.folderList;
+            if (d.songMap && typeof d.songMap === "object") _abStore.songMap = d.songMap;
+            if (d.titleCache && typeof d.titleCache === "object") _abStore.titleCache = d.titleCache;
+            if (d.last && typeof d.last === "object") _abStore.last = d.last;
+            if (d.progress && typeof d.progress === "object") _abStore.progress = d.progress;
+            if (d.queue && typeof d.queue === "object") _abStore.queue = d.queue
+        }
+    } catch (_) {}
+    _abStoreReady = !0;
+    return _abStore
+}
+
+// 宿主永久存储地址（与 kvMirror 的 flushBeacon 同理），用于 sendBeacon 同步落盘。
+let _abStoreUrl = "";
+try { _abStoreUrl = new URL(PLUGIN_BASE + "/rest/abStore", location.href).toString() } catch (_) {}
+function abStorePersist() {
+    if (_abStoreTimer) clearTimeout(_abStoreTimer);
+    _abStoreTimer = setTimeout(() => {
+        try {
+            // 必须先完成宿主加载，否则可能把「尚未装载的空 _abStore」发到宿主，
+            // 覆盖掉宿主中已有的有效书单/映射，导致重进后 abFolderList 全空、抽屉失效。
+            if (!_abStoreReady) return;
+            const obj = {
+                folderList: _abStore.folderList,
+                songMap: _abStore.songMap,
+                titleCache: _abStore.titleCache,
+                last: _abStore.last,
+                progress: _abStore.progress,
+                queue: _abStore.queue
+            };
+            api(PLUGIN_BASE + "/rest/abStore", "POST", obj).catch(() => {});
+            // sendBeacon 同步兜底：不依赖页面存活，任何写入点都立即落盘，
+            // 避免「退出/刷新插件时去抖异步 POST 还没发出就被取消」导致 abFolderList 等丢失、
+            // 重进后抽屉只剩宿主 20 条窗口。beacon 在页面存活时亦可用，故不挂 unload。
+            if (_abStoreUrl && navigator.sendBeacon) {
+                try {
+                    navigator.sendBeacon(_abStoreUrl, new Blob([JSON.stringify(obj)], { type: "application/json" }))
+                } catch (_) {}
+            }
+        } catch (_) {}
+    }, 300)
+}
+
+function abSongMap() {
+    return _abStore.songMap || {}
 }
 
 function abFolderListSave() {
     try {
-        localStorage.setItem("abFolderList", JSON.stringify({
+        _abStore.folderList = {
             path: abFolderPath,
             list: abFolderList
-        }))
+        };
+        abStorePersist()
     } catch (_) {}
 }
 
 function abFolderListLoad() {
-    try {
-        const j = JSON.parse(localStorage.getItem("abFolderList") || "null");
-        if (j && Array.isArray(j.list) && j.list.length) {
-            abFolderList = j.list;
-            if (j.path) abFolderPath = j.path;
-            return !0
-        }
-    } catch (_) {}
+    const j = _abStore.folderList;
+    if (j && Array.isArray(j.list) && j.list.length) {
+        abFolderList = j.list;
+        if (j.path) abFolderPath = j.path;
+        return !0
+    }
     return !1
 }
 
@@ -6514,25 +7060,27 @@ function abSongMapSave(m) {
             s.sort((a, b) => a[1] - b[1]);
             for (let i = 0; i < 1000; i++) delete m[s[i][0]]
         }
-        localStorage.setItem("msm_ab_songmap", JSON.stringify(m))
+        _abStore.songMap = m;
+        abStorePersist()
     } catch (e) {}
 }
 
 function abSongMapPut(trackId, songId) {
     if (!trackId || !songId) return;
     try {
-        const m = abSongMap();
-        m[String(trackId)] = {
+        if (!_abStore.songMap) _abStore.songMap = {};
+        _abStore.songMap[String(trackId)] = {
             sid: String(songId),
             t: Date.now()
         };
-        abSongMapSave(m)
+        abStorePersist()
     } catch (e) {}
 }
 let abFolderList = [],
     abFolderPath = "";
 let abHostW0 = -1,
-    abHostW1 = -1;
+    abHostW1 = -1,
+    abHostCenter = -1;
 async function abResumeSeek(_sid, _tid) {
     if (!isAudiobook() || !_sid) return;
     const pr = abProgressGet(String(_tid));
@@ -6552,9 +7100,55 @@ async function abResumeSeek(_sid, _tid) {
 async function abSetHostWindow(_slim, _center, _play) {
     const N = _slim.length;
     if (!N) return;
-    const _w0 = Math.max(0, _center - 5);
-    const _w1 = Math.min(N - 1, _center + 15);
+    // 宿主队列窗口固定 20 条：以 _center 为中心，前 10 后 9（共 20）。
+    // 这是宿主端维护的「滑动窗口」，抽屉前端的懒加载条数与此独立。
+    const _w0 = Math.max(0, _center - 10);
+    const _w1 = Math.min(N - 1, _center + 9);
     const _slice = _slim.slice(_w0, _w1 + 1);
+    // 有声书滑动窗口推给宿主前，先把窗口内尚未解析 host songId（id 为空/0）的集批量 ensure 出来，
+    // 避免宿主收到 id=0 的歌曲而报「歌曲不存在」。
+    // 直接修改 _slice 元素（与 playerState.queue 共享引用），一次解析、后续复用。
+    const _needIdx = [];
+    const _need = _slice.filter((it, _i) => {
+        if (!Number(it.id)) {
+            _needIdx.push(_i);
+            return true
+        }
+        return false
+    }).map(it => ({
+        sourceId: currentSourceId,
+        trackId: it.trackId != null ? it.trackId : it.id,
+        // 关键：把 track 的 id 补成源 trackId，避免后端用 track.id（窗口外项为 null）构建 dedupKey
+        // 时全部 dedupe 到同一 key，导致所有集复用同一 songId（表现为「相同 id、有进度无声音」）。
+        track: Object.assign({}, it, {
+            id: it.trackId != null ? it.trackId : it.id
+        })
+    }));
+    if (_need.length) {
+        try {
+            // 关键：_need 与 ensureSongIds 返回的 _res 顺序严格一致（后端按入参顺序返回），
+            // 因此用「按下标对应」回填，不再用 trackId 反查——避免窗口内存在重复 trackId
+            // （有声书目录重复音频）时多个元素反查命中同一 songId，导致宿主收到相同 id。
+            const _res = await ensureSongIds(_need);
+            const _usedSid = {};
+            for (let _k = 0; _k < _need.length && _k < _res.length; _k++) {
+                const r = _res[_k];
+                if (!r || r.songId == null) continue;
+                const _sid = Number(r.songId);
+                // 防御：若同一窗口内已出现过该 sid（数据层重复 trackId），不再覆盖为重复 sid，
+                // 保留上一个已解析元素的 sid，避免宿主队列出现重复 id（表现为「相同 id、无声音」）。
+                if (_usedSid[_sid]) {
+                    console.warn("[ab] setHostWindow 检测到重复 sid", _sid, "跳过下标", _needIdx[_k]);
+                    continue
+                }
+                _usedSid[_sid] = 1;
+                const _el = _slice[_needIdx[_k]];
+                if (_el && !Number(_el.id)) _el.id = _sid
+            }
+        } catch (_e) {
+            console.warn("[ab] setHostWindow ensure 部分失败", _e && _e.message)
+        }
+    }
     const _objs = _slice.map(it => ({
         id: Number(it.id),
         title: it.title || "",
@@ -6566,6 +7160,7 @@ async function abSetHostWindow(_slim, _center, _play) {
     const _pos = _center - _w0;
     abHostW0 = _w0;
     abHostW1 = _w1;
+    abHostCenter = _center;
     let _ok = !1;
     try {
         await Player.setQueue(_objs, _pos);
@@ -6574,30 +7169,86 @@ async function abSetHostWindow(_slim, _center, _play) {
     if (!_ok) await Player.setQueue(_sids, _pos).catch(() => {});
     if (_play) {
         const _sid = _sids[_pos];
-        pendingTarget = {
-            songId: String(_sid),
-            token: playSeq,
-            t: Date.now()
-        };
+        // 不覆盖调用方（playTracks / abNav）已设的 pendingTarget（其 token 与发起播放的 playSeq 一致），
+        // 否则 token 错配会导致 applyState 不把本曲标记为正在播 → 界面无声音/进度不动。
+        // 仅当调用方尚未设置 pendingTarget 时（兜底）才在此设置。
+        if (!pendingTarget || Date.now() - pendingTarget.t > 25e2) {
+            pendingTarget = {
+                songId: String(_sid),
+                token: playSeq,
+                t: Date.now()
+            }
+        }
         await Player.play(_sid).catch(() => {});
+        // 等待宿主真正切到目标曲并开始出流，避免「setQueue 后立刻 play、流 URL 未就绪」导致首次无声
+        // （需暂停再播放才有声的经典症状）。最多等 1.5s，宿主就绪即止。
+        for (let _w = 0; _w < 10; _w++) {
+            try {
+                const _st = await Player.getState().catch(() => null);
+                if (_st) {
+                    const _cs = _st.currentSong || _st.current_song;
+                    const _live = _cs && songIdOf(_cs);
+                    if (_live != null && String(_live) === String(_sid)) break
+                }
+            } catch (_) {}
+            await new Promise(r => setTimeout(r, 150))
+        }
         const _tid = _slim[_center] && _slim[_center].trackId;
         await abResumeSeek(_sid, _tid)
     }
-    await feDiag({
-        stage: "abSetHostWindow",
-        w0: _w0,
-        w1: _w1,
-        center: _center,
-        len: _sids.length,
-        play: _play
-    })
+    // 诊断：检测窗口内 trackId / sid 是否有重复（定位「传成相同 id」），并把每个元素的 trackId->sid 映射上报。
+    try {
+        const _tids = _slice.map(it => String(it.trackId != null ? it.trackId : it.id));
+        const _tidSet = {};
+        let _tidDup = 0;
+        for (const t of _tids) {
+            _tidSet[t] = (_tidSet[t] || 0) + 1;
+            if (_tidSet[t] > 1) _tidDup++
+        }
+        const _sidSet = {};
+        let _sidDup = 0;
+        for (const s of _sids) {
+            if (!s) continue;
+            _sidSet[s] = (_sidSet[s] || 0) + 1;
+            if (_sidSet[s] > 1) _sidDup++
+        }
+        await feDiag({
+            stage: "abSetHostWindow",
+            w0: _w0,
+            w1: _w1,
+            center: _center,
+            len: _sids.length,
+            play: _play,
+            tidDup: _tidDup,
+            sidDup: _sidDup,
+            sids: _sids,
+            tids: _tids.map(t => (t || "").slice(-24)),
+            map: _slice.map(it => [String(it.trackId != null ? it.trackId : it.id).slice(-24), Number(it.id)])
+        })
+    } catch (_e) {
+        console.warn("[ab] setHostWindow 诊断失败", _e && _e.message)
+    }
+}
+// 仅把宿主队列同步为以 center 为中心的 20 条窗口（不触发播放）。
+// 用于：①播放推进时窗口随播滑动 ②用户点击某首时推该首前10后10。
+// 用户手动在抽屉里滚动懒加载（只扩前端 plRendered）时**不**调用本函数。
+async function syncHostWindow(center) {
+    if (!isAudiobook()) return;
+    const q = playerState.queue || [];
+    if (!q.length) return;
+    const c = Math.max(0, Math.min(q.length - 1, center | 0));
+    if (c === abHostCenter) return; // 与上次推送中心相同则跳过，避免重复 setQueue
+    abHostCenter = c;
+    abSetHostWindow(q, c, false).catch(e => console.warn("[ab] syncHostWindow 失败", e && e.message))
 }
 async function abNav(dir) {
     if (!isAudiobook()) return;
     try {
-        let all = abFolderList;
+        // 优先用当前播放队列作为完整列表（playTracks/abNav/playAbRel 都会把整本书写入 playerState.queue，
+        // 含 trackId 字段），避免因 abFolderList 被清空（切换/重进）而回退到错误 folder → 「这个分类下没有歌曲」。
+        let all = (playerState.queue && playerState.queue.length) ? playerState.queue.slice() : abFolderList;
         if (!all.length) {
-            const fp = abFolderPath || (abLast() && abLast().folder) || "";
+            const fp = folderPath || abFolderPath || (abLast() && abLast().folder) || "";
             const e = await api(PLUGIN_BASE + "/batch/tracks", "POST", {
                 sourceId: currentSourceId,
                 items: [{
@@ -6611,24 +7262,39 @@ async function abNav(dir) {
             abFolderList = all, abFolderPath = fp, abFolderListSave()
         }
         if (!all.length) return toast("这个分类下没有歌曲");
+        // 从 all 中解析当前集 id（兼容 queue 项 {id,trackId} 与 abFolderList 项 {id}）
         let curId = curTrack && curTrack.id;
-        if (!curId && playerState.currentSong) {
-            curId = String(songIdOf(playerState.currentSong))
+        if (!curId) {
+            const _cs = playerState.currentSong;
+            curId = _cs ? (_cs.trackId != null ? String(_cs.trackId) : String(songIdOf(_cs))) : null
         }
-        let idx = curId ? all.findIndex(x => String(x.id) === String(curId)) : -1;
+        // 统一主键为「源 trackId」：all 项可能来自 queue（{id:hostSid, trackId:源id}）或 abFolderList（{id:源id}）。
+        const normAll = all.map(x => {
+            const _srcId = (x.trackId != null) ? String(x.trackId) : String(x.id);
+            const _sid = (x.trackId != null && x.id != null) ? Number(x.id) : null; // queue 项自带 host sid
+            return {
+                srcId: _srcId,
+                sid: _sid,
+                title: x.title,
+                artist: x.artist,
+                coverId: x.coverId,
+                album: x.album
+            }
+        });
+        let idx = curId ? normAll.findIndex(x => x.srcId === String(curId)) : -1;
         if (idx < 0) idx = playerState.currentIndex >= 0 ? playerState.currentIndex : 0;
         const ni = idx + dir;
-        if (ni < 0 || ni >= all.length) return toast(dir > 0 ? "已经是最后一集" : "已经是第一集");
+        if (ni < 0 || ni >= normAll.length) return toast(dir > 0 ? "已经是最后一集" : "已经是第一集");
         const m = abSongMap();
         const _w0b0 = Math.max(0, ni - 5),
-            _w1b0 = Math.min(all.length - 1, ni + 15);
+            _w1b0 = Math.min(normAll.length - 1, ni + 15);
         const need = [];
         for (let k = _w0b0; k <= _w1b0; k++) {
-            const x = all[k];
-            const c = m[String(x.id)];
+            const x = normAll[k];
+            const c = m[x.srcId];
             if (!(c && c.sid)) need.push({
                 sourceId: currentSourceId,
-                trackId: x.id,
+                trackId: x.srcId,
                 track: x
             })
         }
@@ -6646,16 +7312,16 @@ async function abNav(dir) {
                 console.warn("[ab] ensure 部分失败", _e && _e.message)
             }
         }
-        const _ts = (m[String(all[ni].id)] && m[String(all[ni].id)].sid) || null;
+        const _ts = (m[normAll[ni].srcId] && m[normAll[ni].srcId].sid) || normAll[ni].sid || null;
         if (!_ts) return toast("无法播放该集");
         const e = ++playSeq;
         clearNowPlayingUI();
-        curTrack = all[ni];
-        const _ui = all.map(x => {
-            const c = m[String(x.id)];
+        curTrack = normAll[ni];
+        const _ui = normAll.map(x => {
+            const c = m[x.srcId];
             return {
-                id: c && c.sid ? Number(c.sid) : x.id,
-                trackId: x.id,
+                id: (c && c.sid) ? Number(c.sid) : (x.sid || x.srcId),
+                trackId: x.srcId,
                 title: x.title,
                 artist: x.artist,
                 coverId: x.coverId,
@@ -6681,7 +7347,7 @@ async function abNav(dir) {
         if (_inWin) {
             const _p = Number(_ts);
             await Player.play(_p).catch(() => {});
-            await abResumeSeek(_p, all[ni].id);
+            await abResumeSeek(_p, normAll[ni].srcId);
         } else {
             await abSetHostWindow(_ui, ni, true)
         }
@@ -6693,7 +7359,7 @@ async function abNav(dir) {
             stage: "abNav",
             ni: ni,
             queueLen: _ui.length,
-            winLen: Math.min(21, all.length),
+            winLen: Math.min(21, normAll.length),
             within: _inWin
         })
     } catch (err) {
@@ -6720,7 +7386,9 @@ async function playAbRel(dir) {
         }
         if (!all.length) return toast("这个分类下没有歌曲");
         const curId = curTrack && curTrack.id;
-        const idx = all.findIndex(x => String(x.id) === String(curId));
+        // all 项可能来自 abFolderList（id=hostSid, trackId=sourceId）或 folderTracks（id=sourceId），
+        // 定位当前集时同时匹配 id 与 trackId。
+        const idx = all.findIndex(x => String(x.id) === String(curId) || String(x.trackId) === String(curId));
         const base = idx >= 0 ? idx : 0;
         const ni = base + dir;
         if (ni < 0 || ni >= all.length) return toast(dir > 0 ? "已经是最后一集" : "已经是第一集");
@@ -6728,11 +7396,12 @@ async function playAbRel(dir) {
             need = [],
             sids = [];
         for (const x of all) {
-            const c = m[String(x.id)];
+            const _srcId = String(x.trackId != null ? x.trackId : x.id);
+            const c = m[_srcId];
             if (c && c.sid) sids.push(String(c.sid));
             else need.push({
                 sourceId: currentSourceId,
-                trackId: x.id,
+                trackId: _srcId,
                 track: x
             })
         }
@@ -6752,17 +7421,18 @@ async function playAbRel(dir) {
             }
             abSongMapSave(m)
         }
-        const tg = all[ni].id,
-            _ts = (m[String(tg)] && m[String(tg)].sid) || null;
+        const _srcTg = String(all[ni].trackId != null ? all[ni].trackId : all[ni].id),
+            _ts = (m[_srcTg] && m[_srcTg].sid) || null;
         if (!_ts) return toast("无法播放该集");
         const e = ++playSeq;
         if (clearNowPlayingUI(), curTrack = all[ni], queueClearGuard = !1, playerState = {
                 ...playerState,
                 queue: all.map(x => {
-                    const c2 = m[String(x.id)];
+                    const _srcId = String(x.trackId != null ? x.trackId : x.id);
+                    const c2 = m[_srcId];
                     return c2 && c2.sid ? {
                         ...x,
-                        trackId: x.id,
+                        trackId: _srcId,
                         id: c2.sid
                     } : null
                 }).filter(Boolean),
@@ -6947,6 +7617,10 @@ async function playFolderFrom(t) {
         if (!isAudiobook()) return playTrack(t);
         try {
             const fp = folderPath || (abLast() && abLast().folder) || "";
+            // 记录当前正在播放的文件夹（与 playDirectory 对齐），有声书「播放某集」时
+            // 该文件夹卡片要靠 activeFolderId 兜底点亮示波图（playTracks 不会为 currentSong 写 path，
+            // 且后端 browseDeep 的 path 在未重启宿主时可能为空，故不能仅依赖 path 前缀匹配）。
+            activeFolderId = fp || null;
             const e = await api(PLUGIN_BASE + "/batch/tracks", "POST", {
                 sourceId: currentSourceId,
                 items: [{
@@ -7003,22 +7677,67 @@ async function playFolderFrom(t) {
         }
     })();
 
+function _plFillMore() {
+    const t = $("plList");
+    if (!t) return;
+    const e = playerState.queue || [];
+    // 若已渲染完或容器已经能容纳全部内容（无需滚动），直接返回。
+    if (plRendered >= e.length) return;
+    // 关键兜底：列表总高未超过容器高时，scroll 事件永远不会触发，
+    // 必须主动续渲，否则「返回宿主再进入」后抽屉里只显示前 PL_DEFAULT 条、懒加载形同失效。
+    let _guard = 0;
+    while (plRendered < e.length && t.scrollHeight <= t.clientHeight + 2 && _guard++ < 80) {
+        plRendered = Math.min(e.length, plRendered + PL_PAGE);
+        renderPlaylist(!0);
+    }
+}
+
 function bindPlListLazyLoad() {
     const t = $("plList");
-    !t || t.dataset.plLazy || (t.dataset.plLazy = "1", t.addEventListener("scroll", () => {
-        const e = playerState.queue || [];
-        plRendered >= e.length || t.scrollTop + t.clientHeight >= t.scrollHeight - 80 && (plRendered = Math.min(e.length, plRendered + PL_PAGE), renderPlaylist(!0))
-    }, {
-        passive: !0
-    }))
+    if (!t) return;
+    // 幂等绑定：先移除旧监听再添加，避免 dataset.plLazy 一次性标志导致
+    // webview 重建/重进后监听丢失且永不重绑（原 bug 根因）。
+    try { t.removeEventListener("scroll", _onPlScroll); } catch (_) {}
+    t.addEventListener("scroll", _onPlScroll, { passive: !0 });
+    _plFillMore();
+}
+
+function _onPlScroll() {
+    const t = $("plList");
+    if (!t) return;
+    const e = playerState.queue || [];
+    // 用户手动滚动懒加载：仅扩展前端 plRendered，**不**同步宿主。
+    if (plRendered >= e.length) return;
+    if (t.scrollTop + t.clientHeight >= t.scrollHeight - 200) {
+        plRendered = Math.min(e.length, plRendered + PL_PAGE);
+        renderPlaylist(!0);
+        _plFillMore();
+    }
 }
 async function playQueueIndex(t) {
     const e = ++playSeq;
     clearNowPlayingUI(), queueClearGuard = !1;
     const n = playerState.queue || [];
     if (t < 0 || t >= n.length) return;
-    const s = n[t],
-        o = Number(songIdOf(s));
+    const s = n[t];
+    let o = Number(songIdOf(s));
+    // 懒加载的窗口外集（有声书）id 可能为空：先 ensure 解析出 host sid 再播，避免「该歌曲无法播放」。
+    // 注意：队列项 s.id 是 host sid（窗口外为 null），真正的源 trackId 在 s.trackId；
+    // ensureSongIds 内部会把「无 sourceId 的入参」的 trackId 误取为 s.id（null），导致解析失败/宿主无法播放。
+    // 因此显式构造 {sourceId, trackId:s.trackId}，保证用源 trackId 解析。
+    if (!o) {
+        try {
+            const r = await ensureSongIds([{
+                sourceId: s.sourceId != null ? s.sourceId : currentSourceId,
+                trackId: s.trackId != null ? s.trackId : s.id,
+                track: s
+            }]);
+            const got = r && r[0] && r[0].songId != null ? Number(r[0].songId) : 0;
+            if (got) {
+                s.id = got, o = got
+            }
+        } catch (_) {}
+    }
     if (!o) return toast("\u8BE5\u6B4C\u66F2\u65E0\u6CD5\u64AD\u653E");
     if (playerState = {
             ...playerState,
@@ -7028,7 +7747,7 @@ async function playQueueIndex(t) {
             songId: String(o),
             token: e,
             t: Date.now()
-        }, hydrateNowPlaying(), CastManager.isMiot()) {
+        }, hydrateNowPlaying(), isAudiobook() && syncHostWindow(t), CastManager.isMiot()) {
         await CastManager.castToIndex(t).catch(() => {});
         return
     }
@@ -7160,6 +7879,104 @@ async function clearQueue() {
             } catch (_) {}
         }, 800)
     } catch (_) {}
+}
+// ——— 按音源持久化抽屉播放列表 ———
+// 每个音源各自保存一份队列到宿主 mm_ab_store.queue（key = <srcId>），与音源列表同机制永久存储，
+// 不再依赖浏览器 localStorage（部署清缓存后会丢失）。切换音源时落盘旧源的、导入新源落盘的。
+function saveSourceQueue(t, e) {
+    if (!t) return;
+    try {
+        const n = (e || []).map(it => ({
+            id: songIdOf(it) != null ? Number(songIdOf(it)) : null,
+            trackId: it.trackId != null ? it.trackId : null,
+            title: it.title || "",
+            artist: it.artist || "",
+            album: it.album || "",
+            coverId: it.coverId != null ? it.coverId : null,
+            path: it.path != null ? it.path : null
+        })).filter(x => x.id || x.trackId);
+        if (!_abStore.queue) _abStore.queue = {};
+        _abStore.queue[String(t)] = n;
+        abStorePersist()
+    } catch (_) {}
+}
+function loadSourceQueue(t) {
+    if (!t) return null;
+    try {
+        const a = _abStore.queue && _abStore.queue[String(t)];
+        return Array.isArray(a) ? a : null
+    } catch (_) {
+        return null
+    }
+}
+// 切换音源时：清空当前队列 + 宿主旧源列表，再把新源之前落盘的队列导入前端与宿主。
+// pushHost=true 时同步推给宿主（切换路径）；false 时仅还原前端抽屉显示（初始恢复路径，避免与设备当前队列冲突）。
+async function swapQueueForSource(t, e, pushHost) {
+    const _src = t;
+    // 1) 暂停 + 健壮清空宿主旧源队列
+    try {
+        if (Player.available() && Player.has("pause")) await Player.pause()
+    } catch (_) {}
+    try {
+        if (Player.available() && Player.has("setQueue")) await Player.setQueue([])
+    } catch (_) {}
+    try {
+        if (Player.available() && Player.has("removeFromQueue")) {
+            let k = 300;
+            while (k-- > 0) {
+                try {
+                    await Player.removeFromQueue(0)
+                } catch (_) {
+                    break
+                }
+            }
+        }
+    } catch (_) {}
+    try {
+        if (Player.available() && Player.has("pause")) await Player.pause()
+    } catch (_) {}
+    // 2) 前端队列清空
+    playerState = {
+        ...playerState,
+        queue: [],
+        currentIndex: -1,
+        currentSong: null,
+        playing: !1,
+        position: 0
+    }, playerPosAnchor = null, curTrack = null, renderPlaylist(), renderPlayer();
+    // 3) 导入新源落盘队列
+    const r = loadSourceQueue(_src);
+    if (r && r.length) {
+        const _items = r.map(it => ({
+            id: it.id,
+            trackId: it.trackId,
+            title: it.title,
+            artist: it.artist,
+            album: it.album,
+            coverId: it.coverId,
+            sourceId: _src,
+            path: it.path
+        }));
+        playerState = {
+            ...playerState,
+            queue: _items
+        }, renderPlaylist();
+        if (pushHost && Player.available()) {
+            const h = _items.map(x => Number(x.id)).filter(Boolean);
+            if (h.length) try {
+                if (Player.has("setQueue")) await Player.setQueue(h);
+                else await Player.addToQueue(h)
+            } catch (_) {
+                try {
+                    await Player.addToQueue(h)
+                } catch (_) {}
+            }
+        }
+    }
+    queueSourceId = _src;
+    // 切换属于主动导航：解除「已清空队列」标记与 guard，否则刚刚导入的新源队列会被 applyState 强制清空。
+    try { localStorage.removeItem("mm:queueCleared") } catch (_) {}
+    queueClearGuard = !1
 }
 async function importToSongloft(t) {
     const e = t || curTrack;
@@ -7373,6 +8190,7 @@ async function saveUiState() {
         _snapCurrentNav();
         const t = {
             currentSourceId,
+            currentSourceType: (sources.find(x => x.id === currentSourceId) || {}).type || null,
             view,
             songMode,
             drill,
@@ -7392,6 +8210,20 @@ async function saveUiState() {
             scrollMem,
             savedAt: Date.now()
         };
+        // 有声书完整队列持久化：宿主只维护 20 首滑动窗口，退出重进后前端若只同步宿主会只剩 20 条。
+        // 把完整队列（含 source trackId + host sid）落盘，重进时直接恢复，避免抽屉只剩窗口、懒加载无内容可滚。
+        if (isAudiobook() && playerState.queue && playerState.queue.length) {
+            t.abQueue = playerState.queue.map(x => ({
+                id: x.id,
+                trackId: x.trackId,
+                title: x.title,
+                artist: x.artist,
+                album: x.album,
+                coverId: x.coverId,
+                sourceId: x.sourceId != null ? x.sourceId : currentSourceId
+            }));
+            t.abQueueSourceId = currentSourceId
+        }
         // 同步落盘草稿：beforeunload/pagehide 时 await api 的网络请求常被浏览器杀掉，
         // 导致退出时状态丢失。localStorage 是同步的，可在此可靠保存，恢复时优先采用。
         try {
@@ -7419,7 +8251,23 @@ async function restoreUiState() {
         if (!e) return;
         if (e.navState && typeof e.navState === "object") navState = e.navState;
         if (e.scrollMem && typeof e.scrollMem === "object") scrollMem = e.scrollMem;
-        e.currentSourceId && sources.find(s => s.id === e.currentSourceId) && (currentSourceId = e.currentSourceId);
+        // 优先精确匹配源 id；若重启后源 id 发生变化（如宿主重新生成配置），
+        // 退而按「源类型」匹配，避免刷新/重启插件后回退到本地库等默认源。
+        if (e.currentSourceId && sources.find(s => s.id === e.currentSourceId)) {
+            currentSourceId = e.currentSourceId
+        } else if (e.currentSourceType) {
+            const _m = sources.find(s => s.type === e.currentSourceType && s.enabled) || sources.find(s => s.type === e.currentSourceType);
+            if (_m) currentSourceId = _m.id
+        }
+        // 有声书：退出时落盘的完整队列优先恢复，避免重进后只拿到宿主 20 首滑动窗口。
+        if (isAudiobook() && e.abQueue && Array.isArray(e.abQueue) && e.abQueue.length && e.abQueueSourceId === currentSourceId) {
+            playerState = {
+                ...playerState,
+                queue: e.abQueue.map(msmMergeMeta),
+                currentIndex: -1
+            };
+            queueSourceId = currentSourceId
+        }
         e.view && ["tracks", "albums", "artists", "playlists", "folders", "favorites"].includes(e.view) && (view = e.view);
         e.search && ($("searchInput").value = e.search, searchActive = !0);
         _loadNav(currentSourceId);
@@ -7591,7 +8439,7 @@ function agreeRisk() {
 function renderTypePicker() {
     const t = [{
             name: "\u97F3\u4E50\u670D\u52A1",
-            items: ["fnMusic", "subsonic", "geak"]
+            items: ["fnMusic", "subsonic", "geak", "daoliyu"]
         }, {
             name: "\u6587\u4EF6\u4E0E NAS",
             items: ["webdav"]
@@ -7636,7 +8484,7 @@ async function openEdit(t) {
 function onTypeChange() {
     const t = $("fType").value;
     $("fRootField").style.display = t === "webdav" || t === "subsonic" ? "block" : "none";
-    $("fBase").placeholder = t === "fnMusic" ? "\u98DE\u725B\u97F3\u4E50\u5730\u5740 \u6216 FN ID\uFF08\u5982 pcyear\uFF09" : t === "subsonic" ? "http://NAS\u5730\u5740:4040" : t === "geak" ? "http://NAS\u5730\u5740:9080" : "http://NAS\u5730\u5740:5005";
+    $("fBase").placeholder = t === "fnMusic" ? "\u98DE\u725B\u97F3\u4E50\u5730\u5740 \u6216 FN ID\uFF08\u5982 pcyear\uFF09" : t === "subsonic" ? "http://NAS\u5730\u5740:4040" : t === "geak" ? "http://NAS\u5730\u5740:9080" : t === "daoliyu" ? "http://NAS\u5730\u5740:4000" : "http://NAS\u5730\u5740:5005";
     $("fName").placeholder = t === "fnMusic" ? "\u4F8B\u5982\uFF1A\u6211\u7684\u98DE\u725B\u97F3\u4E50" : t === "subsonic" ? "\u4F8B\u5982\uFF1A\u6211\u7684 Navidrome" : t === "geak" ? "\u4F8B\u5982\uFF1A\u6211\u7684 GEAK NAS" : "\u4F8B\u5982\uFF1A\u6211\u7684 WebDAV";
     const e = t === "fnMusic";
     $("fUserLabel").textContent = e ? "\u98DE\u725B\u97F3\u4E50\u7528\u6237\u540D" : "\u7528\u6237\u540D";
@@ -8249,6 +9097,8 @@ function buildKvMap() {
         for (let i = 0; i < localStorage.length; i++) {
             const k = localStorage.key(i);
             if (!k || k.indexOf("cover:") === 0) continue; // 纯缓存键不落盘
+            // 认证 token 不参与 KV 镜像：避免客户端注入的 token 被空/坏值覆盖到服务端
+            if (k === "songloft-auth" || k === "songloft-plugin-token") continue;
             try { map[k] = localStorage.getItem(k) } catch {}
         }
     } catch {}
@@ -8275,6 +9125,8 @@ function installKvMirror() {
     }
     Storage.prototype.setItem = function () {
         const r = _set.apply(this, arguments);
+        // 认证 token 的写入不触发 KV 上传（其值来自客户端注入或服务端 KV，不应被镜像回写覆盖）
+        if (arguments[0] === "songloft-auth" || arguments[0] === "songloft-plugin-token") return r;
         schedule();
         return r
     };
@@ -8312,11 +9164,58 @@ async function initKv() {
     installKvMirror();
 }
 
+// 认证自愈：本地缺失 songloft-auth 时，通过宿主公开桥接 songloft.plugin.getToken()
+// （无需 HTTP Bearer，直接由客户端原生返回有效 token）恢复，写回 localStorage。
+async function ensureLocalAuth() {
+    try {
+        if (localStorage.getItem("songloft-auth")) return;
+    } catch (e) {}
+    try {
+        const sl = window.songloft;
+        if (sl && sl.plugin && typeof sl.plugin.getToken === "function") {
+            const t = await sl.plugin.getToken();
+            if (t && typeof t === "string" && t.indexOf("eyJ") === 0) {
+                localStorage.setItem("songloft-auth", JSON.stringify({ accessToken: t }));
+                return;
+            }
+        }
+    } catch (e) { /* 桥接不可用则忽略，落到下方 KV 兜底 */ }
+    // 兜底：服务端 KV 已存有合法 JWT，直接取回（此时若已有其他可用 token 则能成功）
+    try {
+        const r = await api(PLUGIN_BASE + "/rest/kv");
+        if (r && r.ok && r.data && typeof r.data === "object" && r.data["songloft-auth"]) {
+            localStorage.setItem("songloft-auth", r.data["songloft-auth"]);
+        }
+    } catch (e) {}
+}
+
 document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", boot) : boot();
 
 async function boot() {
+    // 自愈：若 webview 缓存了旧版 JS，上次运行版本与本次不符则硬刷新一次，强制拉取最新代码。
+    // 平时（版本一致）不触发，不影响正常使用。
+    try {
+        const _last = localStorage.getItem("songloft_lastver");
+        const _cur = String(PLUGIN_VERSION);
+        if (_last && _last !== _cur) {
+            // 自愈只刷新一次：先记录本次版本，避免壳版本与残留缓存不一致时无限刷新
+            try { localStorage.setItem("songloft_lastver", _cur) } catch (_) {}
+            location.reload(!0); return
+        }
+    } catch (_) {}
     await initKv();
-    refreshAllIcons(), renderExtraControls(), npApplySW(), probeAuth(), loadSources().then(retryLyricAfterSources), initPlayerBridge(), CastManager.init(), lyricFillRAF || lyricFillTick(), initToolbarDrag(), bindNpSongSwipe(), placeBulkBar(), restoreScreenLyric(), window.addEventListener("resize", _onResizeRaf(() => placeBulkBar()))
+    // 诊断：把真机实际加载的插件版本写回 KV，便于远端确认 webview 是否加载到最新构建（缓存排查）。
+    try { localStorage.setItem("songloft_bootver", String(PLUGIN_VERSION)) } catch (_) {}
+    await restoreHostSongMap(); // 重启后从宿主永久存储回填 host id → 源 trackId/path 映射，使首帧 applyState 即可定位文件夹示波图
+    await abStoreLoad(); // 启动即从宿主永久存储（mm_ab_store）装载有声书状态（书单/映射/进度/草稿），不依赖浏览器 localStorage
+    // 根除「退出重进抽屉只剩 20 条」：abStoreLoad 仅填 _abStore 内存，必须把完整书单回填到全局
+    // abFolderList，否则退出重进后 abFolderList 为空，用户一切换到有声书文件夹视图，loadView 会用
+    // 分页的 20 条 folderTracks 覆盖并落盘，把宿主里完整的整本书单永久截断成 20 条（懒加载失效）。
+    // 启动即恢复，后续 loadView 的「!abFolderList.length」兜底便不会触发，从根源杜绝截断。
+    try { abFolderListLoad() } catch (_) {}
+    await ensureLocalAuth();
+    refreshAllIcons(), renderExtraControls(), npApplySW(), probeAuth(), loadSources().then(retryLyricAfterSources), initPlayerBridge(), CastManager.init(), lyricFillRAF || lyricFillTick(), initToolbarDrag(), bindNpSongSwipe(), placeBulkBar(), restoreScreenLyric(),     window.addEventListener("resize", _onResizeRaf(() => placeBulkBar()));
+    try { localStorage.setItem("songloft_lastver", String(PLUGIN_VERSION)) } catch (_) {}
 }
 
 function initToolbarDrag() {
