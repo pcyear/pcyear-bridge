@@ -163,8 +163,13 @@ export class FnMusicAdapter implements SourceAdapter {
    *  访问码 cookie（os-access-code）由 verifyAccessCode 用 SDK getSetCookie 显式读取（兼容新老宿主），
    *  并经由 cookieWithGateway 附加到后续请求，不依赖宿主自动维护 cookie jar。 */
   private async fetchMaybe(url: string, init?: any): Promise<any> {
-    // 飞牛设备几乎都是自签 HTTPS（局域网 x.x.x.x:5667 / 公网直连端口），宿主默认 TLS 校验会失败。
-    // 注入 X-Fetch-Insecure 让宿主跳过校验（当前宿主若未识别该头会自动忽略，零副作用）。
+    // 飞牛设备几乎都是自签 HTTPS（局域网 x.x.x.x:5667 / 公网直连端口），且我们是按【裸 IP】访问
+    // （fnID 中继返回的是 ipv4/publicIpv4）——即便设备装了 CA 签发的正式证书，证书主体也是域名，
+    // 按 IP 连必然 hostname mismatch。所以这条链路必须跳过证书校验。
+    // 注入 X-Fetch-Insecure 让宿主跳过校验。**需要 manifest 声明 net:insecure-tls 权限**
+    // （宿主 songloft-org/songloft#401 起支持；未声明权限时宿主静默忽略该头并保持完整校验，
+    // 表现为所有候选网关在 TLS 握手就失败、报「全部候选网关均不可用」）。
+    // 注意：这个头是宿主的内部控制头，宿主会剥离，不会转发给飞牛设备。
     const headers = Object.assign({ 'X-Fetch-Insecure': '1' }, (init && init.headers) || {});
     return fetch(url, { credentials: 'include', ...(init || {}), headers });
   }
