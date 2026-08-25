@@ -10,7 +10,7 @@
   "entryPath": "multisource-music",
   "main": "main.jsc",
   "icon": "icon.81be6f23.png",
-  "minHostVersion": "2.11.0",
+  "minHostVersion": "2.11.7",
   "permissions": [
     "storage",
     "songs.read",
@@ -21,7 +21,8 @@
     "fs",
     "inter-plugin",
     "fs:external",
-    "net"
+    "net",
+    "net:insecure-tls"
   ],
   "publicPaths": [
     "/cover-img",
