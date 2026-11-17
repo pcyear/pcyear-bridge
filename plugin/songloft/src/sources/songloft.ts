@@ -125,11 +125,17 @@ export class SongloftAdapter implements SourceAdapter {
     const tracks = await this.fetchAllSongs();
     const albums = new Map<string, Album>();
     const artists = new Map<string, Artist>();
+    // 艺术家 → 其专辑名集合：用于算真实 albumCount（旧实现恒 0，导致客户端艺术家页显示「0 张专辑」）。
+    const artistAlbumNames = new Map<string, Set<string>>();
     for (const t of tracks) {
       if (t.album) {
         const a = albums.get(t.album);
         if (a) {
           a.trackCount = (a.trackCount || 0) + 1;
+          // 专辑总时长：Subsonic album.duration，客户端据此显示「xx 分钟」。
+          a.duration = (a.duration || 0) + (t.duration || 0);
+          // 专辑 created：取专辑内最早的入库时间（「最近添加」按专辑维度看）。
+          if (t.addedAt && (!a.created || t.addedAt < a.created)) a.created = t.addedAt;
           // 用第一首「有封面」的歌作专辑封面：聚合时首歌可能恰好无封面。
           if (!a.coverId && t.coverId) a.coverId = t.coverId;
           // 收集同专辑内有封面的歌 id 列表（按出现顺序），供后端校验封面真实可解析后择优。
@@ -142,9 +148,17 @@ export class SongloftAdapter implements SourceAdapter {
           albums.set(t.album, {
             id: t.album, name: t.album, artist: t.artist,
             coverId: t.coverId, trackCount: 1, _source: this.sourceId, _raw: { from: 'aggregate' },
+            duration: t.duration || 0,
+            ...(t.addedAt ? { created: t.addedAt } : {}),
             ...(t.coverId ? { coverCandidates: [t.coverId] } : {}),
             _rep: t.id,
           } as any);
+        }
+        // 记录「艺术家 → 专辑」关系（artist 可能为空，空则不计）。
+        if (t.artist) {
+          const set = artistAlbumNames.get(t.artist);
+          if (set) set.add(t.album);
+          else artistAlbumNames.set(t.artist, new Set([t.album]));
         }
       }
       if (t.artist) {
@@ -166,6 +180,12 @@ export class SongloftAdapter implements SourceAdapter {
           } as any);
         }
       }
+    }
+    // 回填真实 albumCount：Subsonic getArtists/getIndexes 的 artist.albumCount 字段直接取它，
+    // 客户端艺术家列表据此显示「N 张专辑」。旧实现从不写该字段 → 全部显示 0。
+    for (const [name, ar] of artists) {
+      const set = artistAlbumNames.get(name);
+      if (set && set.size) ar.albumCount = set.size;
     }
     // 收集专辑/艺人封面候选，供 resolveCoverBytes 首歌无封面时回退到同专辑有封面的歌。
     for (const a of albums.values()) {
@@ -576,6 +596,10 @@ function toTrack(s: any): Track {
     size: s.file_size || undefined,
     bitrate: s.bit_rate || undefined,
     codec: s.format || undefined,
+    // 入库时间/流派：Subsonic 的 created、getGenres、getSongsByGenre 与「最近添加」排序都依赖，
+    // 旧实现不携带 → 专辑 created 恒空、流派页永远「未知」。
+    addedAt: s.added_at || s.file_modified_at || undefined,
+    genre: s.genre || undefined,
     _raw: s,
   };
   return t;

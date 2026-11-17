@@ -12,6 +12,10 @@ export interface Track {
   trackNo?: number;
   discNo?: number;
   year?: number;
+  /** 入库时间（宿主 added_at，ISO 字符串）。Subsonic 的 created 字段与「最近添加」排序都靠它。 */
+  addedAt?: string;
+  /** 流派（宿主 genre）。getGenres / getSongsByGenre 靠它聚合。 */
+  genre?: string;
   coverId?: string;     // 用于拼接封面 URL 的标识
   coverUrl?: string;    // 直接可用的封面 URL（SongLoft 本地库歌曲用宿主 cover_url）
   size?: number;        // 字节
@@ -32,6 +36,10 @@ export interface Album {
   /** 同专辑（或同目录）内可解析封面的候选曲目 coverId，按序择优；pickResolvableCover 失败兜底用 */
   coverCandidates?: string[];
   trackCount?: number;
+  /** 专辑总时长（秒），聚合时累加；Subsonic getAlbum / albumList2 的 duration 字段 */
+  duration?: number;
+  /** 专辑入库时间（取专辑内最早一首的 addedAt），对应 Subsonic 的 created */
+  created?: string;
   _source?: string;
   _raw?: any;
 }
