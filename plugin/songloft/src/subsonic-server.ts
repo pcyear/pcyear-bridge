@@ -160,6 +160,8 @@ const SONG_OUT_ACTIONS = new Set<string>([
   'getMusicDirectory', 'getAlbum', 'getArtist', 'getSong', 'getPlaylist',
   'getPlaylists', 'getAlbumList', 'getAlbumList2', 'getIndexes', 'getArtists',
   'getArtistInfo', 'getArtistInfo2',
+  // 新增的曲目输出接口同样需要新鲜收藏集合，否则这些列表里的红心状态会滞后。
+  'getSongsByGenre', 'getTopSongs', 'getSimilarSongs', 'getSimilarSongs2',
 ]);
 
 function utf8Encode(str: string): Uint8Array {
@@ -931,6 +933,41 @@ async function getLyricText(sourceId: string, trackId: string, title: string, ar
   return text && text.trim() ? text : null;
 }
 
+// 收藏歌曲所属的专辑名集合（getAlbumList2?type=starred 用）。
+// 旧实现把 starred 当 newest 处理，直接返回全部专辑，客户端「收藏」页就显示了整个曲库的封面。
+async function favAlbumNames(): Promise<Set<string>> {
+  const out = new Set<string>();
+  try {
+    const plId = await ensureFavPlaylist();
+    if (!plId) return out;
+    const songs = (await sl().playlists.getSongs(plId)) || [];
+    for (const s of songs as any[]) {
+      const an = s && (s.album || 'SongLoft');
+      if (an) out.add(String(an));
+    }
+  } catch (e: any) {
+    sl().log.warn('[subsonic] favAlbumNames failed: ' + errMsg(e));
+  }
+  return out;
+}
+
+// 某流派下出现过的专辑名集合（getAlbumList2?type=byGenre 用）。
+// 插件没有专辑级 genre 字段，故按曲目 genre 反查其所属专辑。
+async function albumNamesOfGenre(genre: string): Promise<Set<string>> {
+  const out = new Set<string>();
+  const g = norm(genre);
+  if (!g) return out;
+  try {
+    for (const s of await enabledSources()) {
+      const tracks = await perSource(listTracksCached(s.id), [] as Track[], 5000);
+      for (const t of (tracks as Track[])) {
+        if (t.album && t.genre && norm(t.genre) === g) out.add(String(t.album));
+      }
+    }
+  } catch { /* ignore */ }
+  return out;
+}
+
 // 艺术家 → 专辑列表：优先按专辑列表过滤艺术家，兜底按艺术家歌曲聚合
 async function albumsOfArtist(sourceId: string, artistName: string): Promise<Album[]> {
   try {
@@ -1014,6 +1051,9 @@ function songNode(sourceId: string, t: Track): Node {
     coverArt: coverArt as any,
     path: String(t.path || t.id || ''),
     isDir: false,
+    // genre：客户端「流派」页、歌曲详情都读它。宿主有值才输出，空则省略（不发空字符串，
+    // 避免客户端把空流派也当成一个流派项列出来）。
+    ...(t.genre ? { genre: t.genre } : {}),
     ...(starred ? { starred, userStarred: true } : {}),
   });
 }
@@ -1025,6 +1065,10 @@ function albumNode(sourceId: string, al: Album): Node {
     artist: al.artist || '',
     year: al.year || 0,
     songCount: al.trackCount || 0,
+    // duration/created 是 Subsonic 标准专辑字段：客户端用它显示「共 xx 分钟」「最近添加时间」。
+    // 旧实现缺失 → 专辑详情页统计空白、按时间排序全部失效。
+    duration: Math.round(al.duration || 0),
+    ...(al.created ? { created: al.created } : {}),
     coverArt: coverArt as any,
   });
 }
@@ -1080,6 +1124,7 @@ function childOf(sourceId: string, type: 'ar' | 'al' | 'sg', ref: any): Node {
     bitRate: t.bitrate || 0,
     discNumber: t.discNo || 0,
     isDir: false,
+    ...(t.genre ? { genre: t.genre } : {}),
     ...(starred ? { starred, userStarred: true } : {}),
   });
 }
@@ -1513,9 +1558,19 @@ async function handleAction(action: string, p: Record<string, string>, req: HTTP
       const sid = parts[1];
       const album: Album = { id: parts[2], name: parts[3] || parts[2], artist: parts[4] || '', coverId: parts[5] || '' };
       const tracks = await tracksOfAlbum(sid, album);
+      // 专辑级统计：songCount / duration 必须由曲目实际算出。
+      // 旧实现只输出 id/name/artist/coverArt → 客户端专辑详情页的曲目数与总时长永远空白。
+      const totalDuration = tracks.reduce((sum, t) => sum + (t.duration || 0), 0);
+      const earliest = tracks
+        .map(t => t.addedAt)
+        .filter(Boolean)
+        .sort()[0];
       // 专辑节点须带 coverArt（al id 尾部内嵌 coverId），否则客户端无封面可请求。
       const node = n('album', {
         id: p.id, name: album.name, artist: album.artist,
+        songCount: tracks.length,
+        duration: Math.round(totalDuration),
+        ...(earliest ? { created: earliest } : {}),
         ...(album.coverId ? { coverArt: coverIdOf(sid, album.coverId) } : {}),
       }, tracks.map(t => songNode(sid, t)));
       return okResp(fmt, node);
@@ -1630,6 +1685,9 @@ async function handleAction(action: string, p: Record<string, string>, req: HTTP
       const sources = sid ? (await enabledSources()).filter(s => s.id === sid) : await enabledSources();
       const type = p.type || 'alphabeticalByArtist';
       const size = Math.min(intOf(p.size, 10), 500);
+      // ⚠️ 分页：offset 是 Subsonic 协议的分页参数，客户端（音流/Symfonium/Feishin）靠它翻页同步曲库。
+      // 旧实现完全没读 p.offset，任何客户端翻页都返回同一批数据 → 列表停在第一页、同步卡死。
+      const offset = Math.max(intOf(p.offset, 0), 0);
       const albums: { sourceId: string; album: Album }[] = [];
       for (const s of sources) {
         try {
@@ -1637,9 +1695,48 @@ async function handleAction(action: string, p: Record<string, string>, req: HTTP
         } catch { /* ignore */ }
       }
       let list = albums.slice();
-      if (type === 'newest') list.sort((a, b) => (b.album.year || 0) - (a.album.year || 0));
-      else if (type === 'alphabeticalByArtist') list.sort((a, b) => norm(a.album.artist || a.album.name).localeCompare(norm(b.album.artist || b.album.name)));
-      list = list.slice(0, size);
+      const createdOf = (x: { album: Album }): string => String(x.album.created || '');
+      // 收藏专辑：从收藏歌单反查所属专辑（旧实现把 starred 当 newest，返回全部专辑 → 收藏页显示假数据）。
+      if (type === 'starred') {
+        const favAlbums = await favAlbumNames();
+        list = list.filter(x => favAlbums.has(x.album.name));
+      } else if (type === 'newest') {
+        // 按专辑 created 倒序（无 created 的排最后），比旧实现的「按 year 倒序」更贴近语义：
+        // 宿主曲库 year 普遍为 0，按 year 排序等于没排。
+        list.sort((a, b) => createdOf(b).localeCompare(createdOf(a)));
+      } else if (type === 'recent') {
+        // recent = 最近播放过；插件拿不到播放历史，退化为 newest（至少顺序有意义，不再随机）。
+        list.sort((a, b) => createdOf(b).localeCompare(createdOf(a)));
+      } else if (type === 'frequent') {
+        // frequent = 最常播放；无播放统计时按曲目数倒序（曲子多的专辑通常更常听），保持确定性。
+        list.sort((a, b) => (b.album.trackCount || 0) - (a.album.trackCount || 0));
+      } else if (type === 'random') {
+        for (let i = list.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          const tmp = list[i]; list[i] = list[j]; list[j] = tmp;
+        }
+      } else if (type === 'alphabeticalByName') {
+        list.sort((a, b) => norm(a.album.name).localeCompare(norm(b.album.name)));
+      } else if (type === 'alphabeticalByArtist') {
+        list.sort((a, b) => norm(a.album.artist || a.album.name).localeCompare(norm(b.album.artist || b.album.name)));
+      } else if (type === 'byYear') {
+        const from = intOf(p.fromYear, 0), to = intOf(p.toYear, 9999);
+        const lo = Math.min(from, to), hi = Math.max(from, to);
+        list = list.filter(x => {
+          const y = x.album.year || 0;
+          return y >= lo && y <= hi;
+        });
+        // fromYear > toYear 表示倒序（Subsonic 规范）
+        list.sort((a, b) => (from > to ? (b.album.year || 0) - (a.album.year || 0) : (a.album.year || 0) - (b.album.year || 0)));
+      } else if (type === 'byGenre') {
+        const g = norm(p.genre || '');
+        if (g) {
+          const names = await albumNamesOfGenre(g);
+          list = list.filter(x => names.has(x.album.name));
+        }
+      }
+      // 分页必须在排序/过滤之后：客户端要的是「第 offset 条起的 size 条」。
+      list = list.slice(offset, offset + size);
       const tag = action === 'getAlbumList2' ? 'albumList2' : 'albumList';
       return okResp(fmt, n(tag, {}, list.map(x => albumNode(x.sourceId, x.album))));
     }
@@ -1666,7 +1763,12 @@ async function handleAction(action: string, p: Record<string, string>, req: HTTP
 
     case 'search2':
     case 'search3': {
-      const query = p.query || p.any || '';
+      // ⚠️ 关键：部分客户端（实测音流/Musiver）请求「全部歌曲」时，把空查询发成 `query=""`
+      // —— 两个**字面双引号**而不是空串。若直接 query.trim() 会判为非空，走「关键词搜索」分支，
+      // 拿 "" 当关键词去搜，结果恒为空 → 客户端「歌曲」页显示「暂无曲目」。
+      // 这里把「去掉引号/空白后为空」的查询一律当空查询处理（Subsonic 协议语义就是取全部）。
+      const rawQuery = p.query != null ? String(p.query) : (p.any != null ? String(p.any) : '');
+      const query = rawQuery.replace(/^[\s"']+|[\s"']+$/g, '');
       const sid = resolveFolderId(p.musicFolderId || '');
       const sources = sid ? (await enabledSources()).filter(s => s.id === sid) : await enabledSources();
       const artistCount = intOf(p.artistCount, 20);
@@ -1678,17 +1780,28 @@ async function handleAction(action: string, p: Record<string, string>, req: HTTP
 
       if (query.trim()) {
         // 有查询词：走各 adapter 搜索
+        // 分页：搜索结果也要按 songOffset/albumOffset/artistOffset 切片，否则客户端搜索框
+        // 下拉「加载更多」永远拿到同一批（音流搜索页就是这个行为）。
+        const songOff = Math.max(intOf(p.songOffset, 0), 0);
+        const albumOff = Math.max(intOf(p.albumOffset, 0), 0);
+        const artistOff = Math.max(intOf(p.artistOffset, 0), 0);
+        const allArtists: Node[] = [];
+        const allAlbums: Node[] = [];
+        const allSongs: Node[] = [];
         for (const s of sources) {
           try {
-            const searchLimit = Math.min(intOf(p.songCount, 100), 500);
+            // 取数时要覆盖「偏移 + 本页」，故 limit 加上 offset 再取。
+            const searchLimit = Math.min(songOff + intOf(p.songCount, 100), 500);
             const r = await cached('sr|' + s.id + '|' + query + '|' + searchLimit, () => s.adapter.search(query, { limit: searchLimit }));
             if (!r) continue;
-            for (const ar of (r.artists || []).slice(0, artistCount)) artists.push(artistNode(s.id, ar));
-            for (const al of (r.albums || []).slice(0, albumCount)) albums.push(albumNode(s.id, al));
-            for (const t of (r.tracks || []).slice(0, songCount)) songs.push(songNode(s.id, t));
-            if (artists.length >= artistCount && albums.length >= albumCount && songs.length >= songCount) break;
+            for (const ar of (r.artists || [])) allArtists.push(artistNode(s.id, ar));
+            for (const al of (r.albums || [])) allAlbums.push(albumNode(s.id, al));
+            for (const t of (r.tracks || [])) allSongs.push(songNode(s.id, t));
           } catch { /* ignore */ }
         }
+        artists.push(...allArtists.slice(artistOff, artistOff + artistCount));
+        albums.push(...allAlbums.slice(albumOff, albumOff + albumCount));
+        songs.push(...allSongs.slice(songOff, songOff + songCount));
       } else {
         // 空查询：返回歌曲列表（第三方客户端如箭头音乐用此获取「全部歌曲」）
         // ⚠️ 绝不用 listTracks（全量枚举太重，单线程下会卡死所有其他 API）；
@@ -1696,12 +1809,19 @@ async function handleAction(action: string, p: Record<string, string>, req: HTTP
         // 硬上限放宽到 1000（之前硬限 50 导致箭头音乐「所有歌曲」只显示约 50 首，
         // 真机 capture + 代码双重证实）。
         const totalSongLimit = Math.min(intOf(p.songCount, 500), 1000);
+        // ⚠️ songOffset：音流/Feishin 的「歌曲」页靠它分页拉全库。旧实现完全没读该参数，
+        // 翻页永远返回前 N 首 → 歌曲页显示「暂无曲目」或永远只有第一页。
+        const songOffset = Math.max(intOf(p.songOffset, 0), 0);
+        let skipped = 0;
         let collected = 0;
         for (const s of sources) {
           if (collected >= totalSongLimit) break;
           try {
             const tracks = await perSource(listTracksCached(s.id), [] as Track[], 5000);
-            for (const t of (tracks as Track[]).slice(0, totalSongLimit - collected)) {
+            for (const t of (tracks as Track[])) {
+              // 先按全局偏移跳过前面的曲目，再收集本页。
+              if (skipped < songOffset) { skipped++; continue; }
+              if (collected >= totalSongLimit) break;
               songs.push(songNode(s.id, t));
               collected++;
             }
@@ -1966,6 +2086,88 @@ async function handleAction(action: string, p: Record<string, string>, req: HTTP
     case 'getInternetRadioStations':
       if (action === 'getInternetRadioStations') return okResp(fmt, n('internetRadioStations', {}, []));
       return okResp(fmt, null);
+
+    // ===== 流派：音流/Feishin/Symfonium 的「流派」页依赖这两个接口 =====
+    // 旧实现落到 default 返回 "Unknown Subsonic API method"，客户端整页报错或空白。
+    case 'getGenres': {
+      // 统计每个流派下的歌曲数/专辑数（专辑按名字去重，避免同名专辑重复计）。
+      const stat = new Map<string, { songs: number; albums: Set<string> }>();
+      for (const s of await enabledSources()) {
+        const tracks = await perSource(listTracksCached(s.id), [] as Track[], 5000);
+        for (const t of (tracks as Track[])) {
+          const g = (t.genre || '').trim();
+          if (!g) continue;
+          const e = stat.get(g) || { songs: 0, albums: new Set<string>() };
+          e.songs++;
+          if (t.album) e.albums.add(t.album);
+          stat.set(g, e);
+        }
+      }
+      const genres = Array.from(stat.entries())
+        .sort((a, b) => b[1].songs - a[1].songs)
+        .map(([name, e]) => n('genre', { songCount: e.songs, albumCount: e.albums.size }, [], name));
+      return okResp(fmt, n('genres', {}, genres));
+    }
+
+    case 'getSongsByGenre': {
+      const genre = norm(p.genre || '');
+      if (!genre) return errResp(fmt, 10, 'Required parameter is missing: genre');
+      const count = Math.min(intOf(p.count, 10), 500);
+      const offset = Math.max(intOf(p.offset, 0), 0);
+      const pool: { sourceId: string; track: Track }[] = [];
+      for (const s of await enabledSources()) {
+        const tracks = await perSource(listTracksCached(s.id), [] as Track[], 5000);
+        for (const t of (tracks as Track[])) {
+          if (t.genre && norm(t.genre) === genre) pool.push({ sourceId: s.id, track: t });
+        }
+      }
+      const picked = pool.slice(offset, offset + count);
+      return okResp(fmt, n('songsByGenre', {}, picked.map(x => songNode(x.sourceId, x.track))));
+    }
+
+    // ===== 热门歌曲：无播放统计，按艺术家曲目顺序返回（比「接口不存在」友好得多） =====
+    case 'getTopSongs': {
+      const artist = p.artist || '';
+      if (!artist) return errResp(fmt, 10, 'Required parameter is missing: artist');
+      const count = Math.min(intOf(p.count, 50), 500);
+      const pool: { sourceId: string; track: Track }[] = [];
+      for (const s of await enabledSources()) {
+        const tracks = await perSource(listTracksCached(s.id), [] as Track[], 5000);
+        for (const t of (tracks as Track[])) {
+          if (t.artist && norm(t.artist) === norm(artist)) pool.push({ sourceId: s.id, track: t });
+        }
+      }
+      const picked = pool.slice(0, count);
+      return okResp(fmt, n('topSongs', {}, picked.map(x => songNode(x.sourceId, x.track))));
+    }
+
+    // ===== 专辑/艺术家简介：插件无外部元数据源，返回合法空结构 =====
+    // 关键：必须返回「结构正确但内容为空」，而不是 code:0 报错——客户端拿到错误会把整页判为失败。
+    case 'getAlbumInfo':
+    case 'getAlbumInfo2':
+      return okResp(fmt, n('albumInfo', {}, [n('notes', {}, [], '')]));
+
+    // ===== 正在播放：插件不追踪各客户端的播放状态，返回空列表 =====
+    case 'getNowPlaying':
+      return okResp(fmt, n('nowPlaying', {}, []));
+
+    // ===== 相似歌曲：无推荐算法，返回该曲所属专辑的其他曲目（可接受的相关性） =====
+    case 'getSimilarSongs':
+    case 'getSimilarSongs2': {
+      const parts = decId(p.id || '');
+      const count = Math.min(intOf(p.count, 50), 500);
+      if (parts[0] === 'sg' && parts[1] && parts[2]) {
+        const sid = parts[1];
+        const tracks = await perSource(listTracksCached(sid), [] as Track[], 5000);
+        const cur = (tracks as Track[]).find(t => String(t.id) === String(parts[2]));
+        const albumName = cur && cur.album;
+        const pool = (tracks as Track[])
+          .filter(t => t.album && albumName && t.album === albumName && String(t.id) !== String(parts[2]))
+          .slice(0, count);
+        return okResp(fmt, n('similarSongs2', {}, pool.map(t => songNode(sid, t))));
+      }
+      return okResp(fmt, n('similarSongs2', {}, []));
+    }
 
     default:
       return errResp(fmt, 0, 'Unknown Subsonic API method: ' + action);
