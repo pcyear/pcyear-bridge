@@ -374,6 +374,14 @@ function toJson(node: Node): any {
 
 const LRC_TIME_TAG_G = /\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]/g;
 
+// 逐字歌词（QRC/KRC 等）在宿主里可能以「每行一个 {"t":毫秒,"c":"字"} 」的 JSON 行形式存储。
+// 这类机器片段不是歌词正文，必须剔除，否则会原样吐给客户端：
+//   实测《最后的水族馆》getLyrics.value 开头就有 4 行 {"t":0,"c":}（c 为空，属残片），
+//   音流（Musiver）拿到这种内容后解析失败，直接显示「暂无歌词」。
+// 规则：整行形如 {"t":数字,"c":...} 的行一律丢弃（含 c 有值的情况——那是逐字粒度，
+// 拼成正文没有意义，正文字面量由 LRC/纯文本行提供）。
+const LRC_JSON_FRAGMENT_LINE = /^\s*\{\s*"t"\s*:\s*\d+\s*,\s*"c"\s*:\s*[^}]*\}\s*$/;
+
 // 把 LRC 文本解析为 OpenSubsonic 结构化歌词：{synced, line:[{start?, value}]}
 // 支持 [mm:ss.xx] / [mm:ss.xxx] / [mm:ss] 三种时间标签；兼容 \r\n 与 \r 换行、一行多时间标签（每行展开为多行）。
 // ID 标签（[ti:]/[ar:]/[al:]/[au:]/[by:]）按 LRC 规范转成可读文字，并统一提到最前面作为头部行（start:0），
@@ -404,6 +412,9 @@ function parseLrcStructured(text: string): { synced: boolean; line: { start?: nu
     }
     const value = lyricText.trim();
     if (!value) continue;
+    // 逐字歌词的 JSON 残片（{"t":毫秒,"c":"字"}）不是歌词正文，直接跳过，
+    // 否则会被当成一行无时间轴歌词塞进 structuredLyrics，干扰客户端渲染。
+    if (LRC_JSON_FRAGMENT_LINE.test(value)) continue;
     if (times.length) {
       for (const t of times) {
         const ms = t.d === 3 ? t.frac : t.d === 2 ? t.frac * 10 : t.d === 1 ? t.frac * 100 : 0;
@@ -472,7 +483,7 @@ function stripLrcTags(text: string): string {
     .replace(LRC_TIME_TAG_G, '')
     .split('\n')
     .map(l => l.trim())
-    .filter(Boolean)
+    .filter(l => l && !LRC_JSON_FRAGMENT_LINE.test(l))
     .join('\n');
 }
 
@@ -682,10 +693,25 @@ function songIdOf(sourceId: string, t: Track): string {
   return encId('sg', sourceId, t.id || '', t.title || '', t.artist || '', t.album || '');
 }
 function artistIdOf(sourceId: string, ar: Artist): string {
-  return encId('ar', sourceId, ar.id || '', ar.name || '');
+  // ⚠️ 只用「名字」派生 id，绝不掺入 id/coverId 等次要字段。
+  // 原因：同一张专辑/同一个艺人会从不同代码路径生成 id ——
+  //   · 专辑列表（getAlbumList2）拿的是聚合对象，al.id 即专辑名；
+  //   · 歌曲节点（songNode）只有 track，只能拼 '@name:专辑名'；
+  // 两边字段不同 → 编出的 id 不同（实测差一个 '@name:' 前缀）→ 客户端按 song.albumId
+  // 归组时匹配不上专辑 id，专辑详情页就显示「0 首歌曲 / 暂无曲目」。
+  // 统一成「源 + 名字」后，任何路径生成同一张专辑/艺人的 id 必然一致。
+  return encId('ar', sourceId, ar.name || ar.id || '');
 }
 function albumIdOf(sourceId: string, al: Album): string {
-  return encId('al', sourceId, al.id || '', al.name || '', al.artist || '', al.coverId || '');
+  // 同 artistIdOf：只用专辑名派生，保证列表/歌曲/收藏各路径 id 一致。
+  return encId('al', sourceId, al.name || al.id || '');
+}
+/** 按专辑名在缓存里反查专辑对象（取封面/曲目数等列表侧才有的字段）。 */
+async function albumByName(sourceId: string, name: string): Promise<Album | null> {
+  try {
+    const list = await listAlbumsCached(sourceId);
+    return list.find(a => norm(a.name) === norm(name)) || null;
+  } catch { return null; }
 }
 function playlistIdOf(sourceId: string, pl: Playlist): string {
   return encId('pl', sourceId, pl.id || '', pl.name || '');
@@ -1041,13 +1067,17 @@ function songNode(sourceId: string, t: Track): Node {
     artistId,
     parent: albumId,
     duration: Math.round(t.duration || 0),
-    track: t.trackNo || 0,
-    year: t.year || 0,
+    // track/discNumber/bitRate 都是可选字段：宿主 SDK 的 Song 里没有 track_no/disc_no，
+    // bit_rate 也常为 0。照发 0 会让客户端把「序号 0」渲染成问号（实测音流专辑内曲目行首显示「?」）。
+    // 无有效值时不输出，客户端就不渲染该位置。
+    ...(t.trackNo ? { track: t.trackNo } : {}),
+    // 同上：无有效年份时不输出 year，避免客户端把 0 当成真实年份展示。
+    ...(t.year ? { year: t.year } : {}),
     size: t.size || 0,
     contentType: contentTypeOf(t.codec),
     suffix: t.codec || 'mp3',
-    bitRate: t.bitrate || 0,
-    discNumber: t.discNo || 0,
+    ...(t.bitrate ? { bitRate: t.bitrate } : {}),
+    ...(t.discNo ? { discNumber: t.discNo } : {}),
     coverArt: coverArt as any,
     path: String(t.path || t.id || ''),
     isDir: false,
@@ -1063,7 +1093,10 @@ function albumNode(sourceId: string, al: Album): Node {
     id: albumIdOf(sourceId, al),
     name: al.name,
     artist: al.artist || '',
-    year: al.year || 0,
+    // year 是 Subsonic 可选字段。宿主曲库普遍没有年份标签（实测 395 张专辑 year 全为 0），
+    // 若照发 0，客户端会在专辑卡片上如实显示「0」——这不是歌曲数，是年份占位，很难看。
+    // 无有效年份时干脆不输出该字段，客户端就不会渲染。
+    ...(al.year ? { year: al.year } : {}),
     songCount: al.trackCount || 0,
     // duration/created 是 Subsonic 标准专辑字段：客户端用它显示「共 xx 分钟」「最近添加时间」。
     // 旧实现缺失 → 专辑详情页统计空白、按时间排序全部失效。
@@ -1116,13 +1149,17 @@ function childOf(sourceId: string, type: 'ar' | 'al' | 'sg', ref: any): Node {
     artistId,
     parent: albumId,
     duration: Math.round(t.duration || 0),
-    track: t.trackNo || 0,
-    year: t.year || 0,
+    // track/discNumber/bitRate 都是可选字段：宿主 SDK 的 Song 里没有 track_no/disc_no，
+    // bit_rate 也常为 0。照发 0 会让客户端把「序号 0」渲染成问号（实测音流专辑内曲目行首显示「?」）。
+    // 无有效值时不输出，客户端就不渲染该位置。
+    ...(t.trackNo ? { track: t.trackNo } : {}),
+    // 同上：无有效年份时不输出 year，避免客户端把 0 当成真实年份展示。
+    ...(t.year ? { year: t.year } : {}),
     contentType: contentTypeOf(t.codec),
     coverArt: coverArt as any,
     suffix: t.codec || 'mp3',
-    bitRate: t.bitrate || 0,
-    discNumber: t.discNo || 0,
+    ...(t.bitrate ? { bitRate: t.bitrate } : {}),
+    ...(t.discNo ? { discNumber: t.discNo } : {}),
     isDir: false,
     ...(t.genre ? { genre: t.genre } : {}),
     ...(starred ? { starred, userStarred: true } : {}),
@@ -1541,12 +1578,13 @@ async function handleAction(action: string, p: Record<string, string>, req: HTTP
       const parts = decId(p.id || '');
       if (parts[0] !== 'ar' || !parts[1] || !parts[2]) return errResp(fmt, 10, 'Required parameter is missing: id');
       const sid = parts[1];
-      const name = parts[3] || '';
+      // id 结构为 ['ar', sourceId, 艺人名]，第 3 段即艺人名（旧格式是 ['ar',sid,id,name]）。
+      const name = parts[2] || '';
       const albums = await albumsOfArtist(sid, name);
       // 艺术家详情页封面：取首个有封面的专辑作艺术家封面。
       const firstCover = albums.find(al => al.coverId);
       const node = n('artist', {
-        id: p.id, name: name || parts[2], albumCount: albums.length,
+        id: p.id, name, albumCount: albums.length,
         ...(firstCover ? { coverArt: coverIdOf(sid, firstCover.coverId) } : {}),
       }, albums.map(al => albumNode(sid, al)));
       return okResp(fmt, node);
@@ -1556,7 +1594,18 @@ async function handleAction(action: string, p: Record<string, string>, req: HTTP
       const parts = decId(p.id || '');
       if (parts[0] !== 'al' || !parts[1] || !parts[2]) return errResp(fmt, 10, 'Required parameter is missing: id');
       const sid = parts[1];
-      const album: Album = { id: parts[2], name: parts[3] || parts[2], artist: parts[4] || '', coverId: parts[5] || '' };
+      const albumName = parts[2];
+      // id 结构为 ['al', sourceId, 专辑名]（旧格式还拼了 artist/coverId，已废弃）。
+      // 列表侧的封面/艺人/真实专辑 id 回缓存里按名字反查：
+      //  · 对外 id 恒由名字派生（保证与 song.albumId 一致）；
+      //  · 取曲目时用缓存里的原生 album.id（外部源的真实 id 才是 albumTracks 的入参）。
+      const cachedAl = await albumByName(sid, albumName);
+      const album: Album = {
+        id: cachedAl ? (cachedAl.id || albumName) : albumName,
+        name: albumName,
+        artist: cachedAl ? (cachedAl.artist || '') : '',
+        coverId: cachedAl ? (cachedAl.coverId || '') : '',
+      };
       const tracks = await tracksOfAlbum(sid, album);
       // 专辑级统计：songCount / duration 必须由曲目实际算出。
       // 旧实现只输出 id/name/artist/coverArt → 客户端专辑详情页的曲目数与总时长永远空白。
@@ -1566,13 +1615,15 @@ async function handleAction(action: string, p: Record<string, string>, req: HTTP
         .filter(Boolean)
         .sort()[0];
       // 专辑节点须带 coverArt（al id 尾部内嵌 coverId），否则客户端无封面可请求。
+      // 曲目序号：宿主不存 track_no（SDK 的 Song 里没这个字段），但专辑内可以按顺序补 1..N，
+      // 比让客户端显示「?」有意义（专辑内曲目顺序本来就有序）。
       const node = n('album', {
         id: p.id, name: album.name, artist: album.artist,
         songCount: tracks.length,
         duration: Math.round(totalDuration),
         ...(earliest ? { created: earliest } : {}),
         ...(album.coverId ? { coverArt: coverIdOf(sid, album.coverId) } : {}),
-      }, tracks.map(t => songNode(sid, t)));
+      }, tracks.map((t, i) => songNode(sid, t.trackNo ? t : { ...t, trackNo: i + 1 })));
       return okResp(fmt, node);
     }
 
@@ -1610,15 +1661,24 @@ async function handleAction(action: string, p: Record<string, string>, req: HTTP
           children = (tracks as Track[]).map(t => childOf(sid, 'sg', t));
         }
       } else if (type === 'ar') {
-        const artistName = parts[3] || '';
-        name = artistName || parts[2];
+        // id 结构 ['ar', sourceId, 艺人名]
+        const artistName = parts[2] || '';
+        name = artistName;
         const albums = await albumsOfArtist(sid, artistName);
         children = albums.map(al => childOf(sid, 'al', al));
       } else if (type === 'al') {
-        const album: Album = { id: parts[2], name: parts[3] || parts[2], artist: parts[4] || '' };
+        // id 结构 ['al', sourceId, 专辑名]；艺人/封面回缓存按名字反查。
+        const albumName = parts[2] || '';
+        const cachedAl = await albumByName(sid, albumName);
+        const album: Album = {
+          id: albumName, name: albumName,
+          artist: cachedAl ? (cachedAl.artist || '') : '',
+          coverId: cachedAl ? (cachedAl.coverId || '') : '',
+        };
         name = album.name;
         const tracks = await tracksOfAlbum(sid, album);
-        children = tracks.map(t => childOf(sid, 'sg', t));
+        // 同 getAlbum：专辑内按顺序补曲目号 1..N。
+        children = tracks.map((t, i) => childOf(sid, 'sg', t.trackNo ? t : { ...t, trackNo: i + 1 }));
       } else if (type === 'pl') {
         const playlistId = parts[2];
         name = parts[3] || '';
@@ -1843,10 +1903,14 @@ async function handleAction(action: string, p: Record<string, string>, req: HTTP
       return serveStream(p.id || '', req, fmt);
 
     case 'getOpenSubsonicExtensions': {
-      // OpenSubsonic 扩展声明：声明 lyricsList 后，Symfonium/箭头音乐才会走 getLyricsBySongId
-      // 拉结构化（带时间轴）歌词；否则它判定服务端不支持歌词，连 getLyrics 都不调用。
+      // OpenSubsonic 扩展声明：声明 songLyrics 后，客户端才会走 getLyricsBySongId
+      // 拉结构化（带时间轴）歌词；否则它判定服务端不支持歌词，只能退回旧的 getLyrics
+      // （纯文本、无时间轴），部分客户端（实测音流/Musiver）解析失败后直接显示「暂无歌词」。
+      // ⚠️ 扩展名必须是 songLyrics：OpenSubsonic 规范里 lyricsList 是「响应结构名」，
+      //    不是扩展名；写成 lyricsList 客户端永远认不出来（旧实现就是这个 bug）。
+      // 同时保留 lyricsList 作为兼容（个别客户端按该名字探测，多声明无害）。
       // 注意：toJson 把所有子节点都转成对象数组，无法表达 versions:[1] 标量数组，故此处手写响应体。
-      const extNames = ['lyricsList'];
+      const extNames = ['songLyrics', 'lyricsList'];
       if (fmt === 'json') {
         const body: any = {
           status: 'ok', version: API_VERSION, type: SERVER_TYPE, serverVersion: SERVER_VERSION, openSubsonic: true,
